@@ -34,8 +34,10 @@ OAuth setup:
 
 1. In Supabase dashboard, enable GitHub provider in Auth -> Providers.
 2. Configure GitHub OAuth app callback URL:
+	- `https://<your-project-ref>.supabase.co/auth/v1/callback`
+3. Add your app URLs in Supabase Auth redirect allow-list:
 	- `https://<your-project>.vercel.app/auth/callback`
-3. Add the same URL in Supabase redirect allow-list.
+	- `http://localhost:3000/auth/callback` (for local dev)
 4. Ensure GitHub scope includes `read:org` so org membership can be validated.
 
 ## 3) Build Settings

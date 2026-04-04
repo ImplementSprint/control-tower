@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useMemo, useState } from "react";
+import { ShieldCheck } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +13,8 @@ const errorMessages: Record<string, string> = {
   github_scope_missing: "GitHub org verification scope is missing. Contact an admin.",
   org_membership_required: "Access is restricted to ImplementSprint organization members.",
   org_check_failed: "GitHub org verification failed. Please try again.",
+  provider_not_enabled:
+    "GitHub OAuth is not enabled in Supabase yet. Enable GitHub provider in Supabase Auth -> Providers, configure Client ID/Secret, and ensure your app callback URL is in Supabase redirect allow-list.",
 };
 
 function getSafeNextPath(value: string | null) {
@@ -20,6 +23,19 @@ function getSafeNextPath(value: string | null) {
   }
 
   return value;
+}
+
+function mapOAuthError(message: string) {
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes("unsupported provider") ||
+    normalized.includes("provider is not enabled")
+  ) {
+    return errorMessages.provider_not_enabled;
+  }
+
+  return message;
 }
 
 function LoginContent() {
@@ -42,18 +58,28 @@ function LoginContent() {
       redirectTo.searchParams.set("next", nextPath);
 
       const supabase = getSupabaseBrowserClient();
-      const { error: signInError } = await supabase.auth.signInWithOAuth({
+      const { data, error: signInError } = await supabase.auth.signInWithOAuth({
         provider: "github",
         options: {
           redirectTo: redirectTo.toString(),
           scopes: "read:org user:email",
+          skipBrowserRedirect: true,
         },
       });
 
       if (signInError) {
-        setError(signInError.message);
+        setError(mapOAuthError(signInError.message));
         setIsLoading(false);
+        return;
       }
+
+      if (!data?.url) {
+        setError("Could not start GitHub authentication. Please try again.");
+        setIsLoading(false);
+        return;
+      }
+
+      window.location.assign(data.url);
     } catch (requestError) {
       setError(
         requestError instanceof Error
@@ -65,18 +91,47 @@ function LoginContent() {
   }
 
   return (
-    <main className="min-h-screen bg-background px-4 py-10 sm:px-6">
-      <div className="mx-auto flex w-full max-w-md items-center">
-        <Card className="w-full border-border/80 bg-card shadow-sm">
-          <CardHeader className="space-y-2">
+    <main className="relative min-h-screen overflow-hidden bg-background px-4 py-10 sm:px-6">
+      <div className="pointer-events-none absolute -left-24 -top-16 h-72 w-72 rounded-full bg-[oklch(0.94_0.06_54_/_0.8)] blur-3xl" />
+      <div className="pointer-events-none absolute -right-24 -top-12 h-80 w-80 rounded-full bg-[oklch(0.93_0.08_124_/_0.75)] blur-3xl" />
+
+      <div className="relative mx-auto grid w-full max-w-5xl gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+        <section className="hidden rounded-[28px] border border-border/70 bg-card/95 p-8 shadow-sm lg:block">
+          <div className="inline-flex size-12 items-center justify-center rounded-2xl border border-border/70 bg-background">
+            <ShieldCheck className="size-6 text-foreground" />
+          </div>
+          <h1 className="mt-6 font-heading text-4xl font-semibold tracking-tight text-foreground">
+            Control Tower
+          </h1>
+          <p className="mt-3 max-w-sm text-sm text-muted-foreground">
+            Centralized CI/CD visibility with tribe-scoped access and governance controls.
+          </p>
+          <div className="mt-8 space-y-3 text-sm text-muted-foreground">
+            <p className="rounded-xl border border-border/70 bg-background px-3 py-2">
+              View-only by default for tribe members.
+            </p>
+            <p className="rounded-xl border border-border/70 bg-background px-3 py-2">
+              GitHub org membership enforcement on sign-in.
+            </p>
+            <p className="rounded-xl border border-border/70 bg-background px-3 py-2">
+              Audited admin overrides for controlled operations.
+            </p>
+          </div>
+        </section>
+
+        <Card className="w-full rounded-[28px] border-border/70 bg-card/95 shadow-sm">
+          <CardHeader className="space-y-3 text-center">
+            <div className="mx-auto inline-flex size-12 items-center justify-center rounded-2xl border border-border/70 bg-background">
+              <ShieldCheck className="size-6 text-foreground" />
+            </div>
             <CardTitle className="font-heading text-3xl font-semibold tracking-tight">
-              Sign in to Control Tower
+              Sign in
             </CardTitle>
             <p className="text-sm text-muted-foreground">
               Access is limited to ImplementSprint GitHub organization members.
             </p>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4 pb-6">
             {incomingError ? (
               <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
                 {errorMessages[incomingError] ?? "Authentication failed."}
@@ -91,12 +146,16 @@ function LoginContent() {
 
             <Button
               type="button"
-              className="w-full"
+              className="h-10 w-full"
               disabled={isLoading}
               onClick={handleGitHubLogin}
             >
               {isLoading ? "Redirecting to GitHub..." : "Continue with GitHub"}
             </Button>
+
+            <p className="text-center text-xs text-muted-foreground">
+              Need access? Ask a platform admin to assign your tribe membership.
+            </p>
           </CardContent>
         </Card>
       </div>
