@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 type SupabaseRouteContext = {
   supabase: ReturnType<typeof createServerClient>;
@@ -13,6 +14,13 @@ function resolveSafeNextPath(rawNext: string | null) {
   }
 
   if (!rawNext.startsWith("/") || rawNext.startsWith("//")) {
+    return "/";
+  }
+
+  if (
+    rawNext.startsWith("/auth/login") ||
+    rawNext.startsWith("/auth/callback")
+  ) {
     return "/";
   }
 
@@ -96,7 +104,8 @@ function redirectWithSessionCookies(sessionResponse: NextResponse, redirectUrl: 
   const redirectResponse = NextResponse.redirect(redirectUrl);
 
   for (const cookie of sessionResponse.cookies.getAll()) {
-    redirectResponse.cookies.set(cookie.name, cookie.value, cookie);
+    const { name, value, ...options } = cookie;
+    redirectResponse.cookies.set(name, value, options);
   }
 
   return redirectResponse;
@@ -122,14 +131,23 @@ export async function GET(request: Request) {
     return redirectWithSessionCookies(sessionResponse, redirectUrl);
   }
 
-  const requiredOrgs = (process.env.GITHUB_ALLOWED_ORG ?? "")
+  const requiredOrgs = (
+    process.env.GITHUB_ALLOWED_ORG ??
+    process.env.NEXT_PUBLIC_GITHUB_ALLOWED_ORG ??
+    ""
+  )
     .split(",")
     .map((org) => org.trim())
     .filter((org) => org.length > 0);
 
   const explicitEnforceToggle =
-    (process.env.GITHUB_REQUIRE_ORG_MEMBERSHIP ?? "false").trim().toLowerCase() ===
-    "true";
+    (
+      process.env.GITHUB_REQUIRE_ORG_MEMBERSHIP ??
+      process.env.NEXT_PUBLIC_GITHUB_REQUIRE_ORG_MEMBERSHIP ??
+      "false"
+    )
+      .trim()
+      .toLowerCase() === "true";
 
   // Enforce org policy when explicitly enabled OR when allowed orgs are configured.
   const enforceOrgPolicy = explicitEnforceToggle || requiredOrgs.length > 0;
@@ -183,6 +201,57 @@ export async function GET(request: Request) {
       const redirectUrl = new URL("/auth/login", url.origin);
       redirectUrl.searchParams.set("error", "org_check_failed");
       return redirectWithSessionCookies(sessionResponse, redirectUrl);
+    }
+  }
+
+  const authenticatedUserId =
+    data.user?.id ?? data.session?.user?.id ?? null;
+
+  if (authenticatedUserId) {
+    try {
+      const adminClient = createSupabaseAdminClient();
+      const { data: memberships, error: membershipError } = await adminClient
+        .from("user_tribe_membership")
+        .select("id")
+        .eq("user_id", authenticatedUserId)
+        .eq("is_active", true)
+        .limit(1);
+
+      if (membershipError) {
+        const deniedUrl = new URL("/auth/denied", url.origin);
+        deniedUrl.searchParams.set("reason", "membership_table_unavailable");
+        deniedUrl.searchParams.set("next", nextPath);
+        return redirectWithSessionCookies(sessionResponse, deniedUrl);
+      }
+
+      if (!memberships || memberships.length === 0) {
+        const metadataRole =
+          typeof data.user?.app_metadata?.role === "string"
+            ? data.user.app_metadata.role.trim().toLowerCase()
+            : "";
+        const metadataTribe =
+          typeof data.user?.user_metadata?.tribe === "string"
+            ? data.user.user_metadata.tribe.trim().toLowerCase()
+            : "";
+
+        const hasMetadataFallbackAccess =
+          metadataRole === "platform_admin" || metadataTribe.length > 0;
+
+        if (hasMetadataFallbackAccess) {
+          const redirectUrl = new URL(nextPath, url.origin);
+          return redirectWithSessionCookies(sessionResponse, redirectUrl);
+        }
+
+        const deniedUrl = new URL("/auth/denied", url.origin);
+        deniedUrl.searchParams.set("reason", "tribe_membership_required");
+        deniedUrl.searchParams.set("next", nextPath);
+        return redirectWithSessionCookies(sessionResponse, deniedUrl);
+      }
+    } catch {
+      const deniedUrl = new URL("/auth/denied", url.origin);
+      deniedUrl.searchParams.set("reason", "membership_check_failed");
+      deniedUrl.searchParams.set("next", nextPath);
+      return redirectWithSessionCookies(sessionResponse, deniedUrl);
     }
   }
 

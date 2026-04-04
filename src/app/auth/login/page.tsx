@@ -84,6 +84,10 @@ function getSafeNextPath(value: string | null) {
     return "/";
   }
 
+  if (value.startsWith("/auth/login") || value.startsWith("/auth/callback")) {
+    return "/";
+  }
+
   return value;
 }
 

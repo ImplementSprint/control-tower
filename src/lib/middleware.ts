@@ -34,14 +34,16 @@ export async function updateSession(request: NextRequest) {
     }
   )
 
-  // Do not run code between createServerClient and
-  // supabase.auth.getClaims(). A simple mistake could make it very hard to debug
-  // issues with users being randomly logged out.
+  // Keep auth retrieval directly after client creation to avoid session drift.
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser()
 
-  // IMPORTANT: If you remove getClaims() and you use server-side rendering
-  // with the Supabase client, your users may be randomly logged out.
-  const { data } = await supabase.auth.getClaims()
-  const user = data?.claims
+  // Avoid hard-failing into login loops on transient auth provider errors.
+  if (authError) {
+    return supabaseResponse
+  }
 
   if (
     !user &&
