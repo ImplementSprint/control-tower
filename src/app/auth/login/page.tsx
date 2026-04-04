@@ -34,21 +34,31 @@ const enforceOrgPolicy =
 
 const allowedOrgHint = enforceOrgPolicy ? configuredAllowedOrgHint : "";
 
+type SideNote = {
+  text: string;
+  time: string;
+  top: string;
+  rotate: number;
+  done?: boolean;
+};
+
 const floatingLeftNotes = [
-  { text: "Review failed runs", time: "18:00", top: "8%", rotate: -10 },
-  { text: "Verify release gates", time: "14:30", top: "25%", rotate: -7 },
-  { text: "Check policy alerts", time: "10:00", top: "42%", rotate: -11 },
-  { text: "Track uat stability", time: "16:00", top: "60%", rotate: -8 },
-  { text: "Confirm promotion", time: "20:00", top: "77%", rotate: -12 },
-];
+  { text: "Review failed runs", time: "18:00", top: "6%", rotate: -11, done: true },
+  { text: "Verify release gates", time: "14:30", top: "23%", rotate: -8 },
+  { text: "Check policy alerts", time: "10:00", top: "40%", rotate: -10 },
+  { text: "Track uat stability", time: "16:00", top: "57%", rotate: -9, done: true },
+  { text: "Confirm promotion", time: "20:00", top: "74%", rotate: -12 },
+  { text: "Close incident brief", time: "08:00", top: "91%", rotate: -7 },
+] satisfies SideNote[];
 
 const floatingRightNotes = [
-  { text: "Ship mobile build", time: "20:00", top: "12%", rotate: 9 },
-  { text: "Sync with cicd tribe", time: "11:00", top: "30%", rotate: 7 },
-  { text: "Audit workflow jobs", time: "22:00", top: "48%", rotate: 10 },
-  { text: "Monitor test branch", time: "18:00", top: "66%", rotate: 8 },
-  { text: "Close release brief", time: "08:00", top: "83%", rotate: 11 },
-];
+  { text: "Ship mobile build", time: "20:00", top: "11%", rotate: 9 },
+  { text: "Sync with cicd tribe", time: "11:00", top: "28%", rotate: 7, done: true },
+  { text: "Audit workflow jobs", time: "22:00", top: "45%", rotate: 10 },
+  { text: "Monitor test branch", time: "18:00", top: "62%", rotate: 8 },
+  { text: "Close release brief", time: "08:00", top: "79%", rotate: 11, done: true },
+  { text: "Prep next rollout", time: "07:30", top: "94%", rotate: 8 },
+] satisfies SideNote[];
 
 function normalizeScopeString(value: string) {
   return Array.from(
@@ -189,12 +199,18 @@ function LoginContent() {
         {floatingLeftNotes.map((note) => (
           <div
             key={note.text}
-            className="absolute left-[-3.2rem] flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-medium text-slate-500 shadow-sm"
+            className="absolute left-[-5.8rem] min-w-[170px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-500 shadow-[0_2px_8px_rgba(15,23,42,0.08)]"
             style={{ top: note.top, transform: `rotate(${note.rotate}deg)` }}
           >
-            <span className="inline-flex size-3 rounded-full border border-slate-300" />
-            <span>{note.text}</span>
-            <span className="text-[10px] text-slate-400">{note.time}</span>
+            <div className="flex items-start gap-2">
+              <span className="mt-[2px] inline-flex size-3.5 items-center justify-center rounded-full border border-slate-300 text-[9px] leading-none text-slate-500">
+                {note.done ? "v" : ""}
+              </span>
+              <div>
+                <p className="text-[11px] font-medium leading-4 text-slate-600">{note.text}</p>
+                <p className="mt-0.5 text-[10px] text-slate-400">{note.time}</p>
+              </div>
+            </div>
           </div>
         ))}
       </div>
@@ -203,12 +219,18 @@ function LoginContent() {
         {floatingRightNotes.map((note) => (
           <div
             key={note.text}
-            className="absolute right-[-3.2rem] flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-medium text-slate-500 shadow-sm"
+            className="absolute right-[-5.8rem] min-w-[170px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-500 shadow-[0_2px_8px_rgba(15,23,42,0.08)]"
             style={{ top: note.top, transform: `rotate(${note.rotate}deg)` }}
           >
-            <span className="inline-flex size-3 rounded-full border border-slate-300" />
-            <span>{note.text}</span>
-            <span className="text-[10px] text-slate-400">{note.time}</span>
+            <div className="flex items-start gap-2">
+              <span className="mt-[2px] inline-flex size-3.5 items-center justify-center rounded-full border border-slate-300 text-[9px] leading-none text-slate-500">
+                {note.done ? "v" : ""}
+              </span>
+              <div>
+                <p className="text-[11px] font-medium leading-4 text-slate-600">{note.text}</p>
+                <p className="mt-0.5 text-[10px] text-slate-400">{note.time}</p>
+              </div>
+            </div>
           </div>
         ))}
       </div>
@@ -222,7 +244,7 @@ function LoginContent() {
             <span className="rounded-md bg-zinc-900" />
           </div>
 
-          <h1 className="mx-auto mt-7 max-w-[560px] text-balance font-heading text-[clamp(2.2rem,5vw,3.7rem)] font-semibold leading-[1.08] tracking-[-0.02em] text-slate-600">
+          <h1 className="mx-auto mt-7 max-w-[560px] text-balance font-heading text-[clamp(1.85rem,4vw,3.1rem)] font-semibold leading-[1.12] tracking-[-0.02em] text-slate-600">
             Joyful and productive collaboration.
             <span className="text-slate-900"> All in one.</span>
           </h1>
@@ -247,9 +269,13 @@ function LoginContent() {
             disabled={isLoading}
             onClick={handleGitHubLogin}
           >
-            <span className="inline-flex size-4 items-center justify-center rounded-full border border-white/40 text-[8px] font-bold leading-none tracking-tight">
-              GH
-            </span>
+            <svg
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+              className="size-4 fill-current text-white"
+            >
+              <path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.5-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.01.08-2.1 0 0 .67-.21 2.2.82a7.62 7.62 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.09.16 1.9.08 2.1.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+            </svg>
             {isLoading ? "Redirecting to GitHub..." : "Continue with GitHub"}
           </Button>
 
