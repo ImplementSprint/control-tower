@@ -2,8 +2,17 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { Check, Circle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+
+function GitHubMarkIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" className={className}>
+      <path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.5-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.01.08-2.1 0 0 .67-.21 2.2.82a7.62 7.62 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.09.16 1.9.08 2.1.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+    </svg>
+  );
+}
 
 const errorMessages: Record<string, string> = {
   missing_oauth_code: "GitHub sign-in did not return an authorization code.",
@@ -37,28 +46,71 @@ const allowedOrgHint = enforceOrgPolicy ? configuredAllowedOrgHint : "";
 type SideNote = {
   text: string;
   time: string;
-  top: string;
+  position: string;
   rotate: number;
   done?: boolean;
 };
 
+const floatingTopNotes = [
+  { text: "Bake a cake", time: "18:00", position: "7%", rotate: 21 },
+  { text: "Brunch with Ava", time: "10:30", position: "21%", rotate: 16, done: true },
+  { text: "Family BBQ", time: "14:00", position: "34%", rotate: 8, done: true },
+  { text: "Plan for diversity", time: "11:00", position: "47%", rotate: 12 },
+  { text: "Go to the gym", time: "19:00", position: "61%", rotate: -8 },
+  { text: "Hang with Friends", time: "23:00", position: "75%", rotate: 9 },
+] satisfies SideNote[];
+
+const floatingBottomNotes = [
+  { text: "Plan for diversity", time: "10:00", position: "11%", rotate: -10 },
+  { text: "Brunch with Felix", time: "14:00", position: "27%", rotate: -8, done: true },
+  { text: "Go to the gym", time: "19:00", position: "43%", rotate: -10 },
+  { text: "Brunch with Felix", time: "14:00", position: "58%", rotate: -9 },
+  { text: "Go to the gym", time: "19:00", position: "73%", rotate: -8 },
+] satisfies SideNote[];
+
 const floatingLeftNotes = [
-  { text: "Review failed runs", time: "18:00", top: "6%", rotate: -11, done: true },
-  { text: "Verify release gates", time: "14:30", top: "23%", rotate: -8 },
-  { text: "Check policy alerts", time: "10:00", top: "40%", rotate: -10 },
-  { text: "Track uat stability", time: "16:00", top: "57%", rotate: -9, done: true },
-  { text: "Confirm promotion", time: "20:00", top: "74%", rotate: -12 },
-  { text: "Close incident brief", time: "08:00", top: "91%", rotate: -7 },
+  { text: "Sign up with Ava", time: "10:00", position: "9%", rotate: 19 },
+  { text: "Buy a new car", time: "12:00", position: "19%", rotate: 14 },
+  { text: "Do something fun", time: "15:30", position: "29%", rotate: 13 },
+  { text: "Mountain bike", time: "18:00", position: "39%", rotate: 18 },
+  { text: "Meet with Ava", time: "11:00", position: "49%", rotate: 16 },
+  { text: "Plan for Amie", time: "17:00", position: "59%", rotate: 15 },
+  { text: "Go with Ava", time: "09:00", position: "69%", rotate: 13 },
+  { text: "Plan for Amie", time: "17:00", position: "79%", rotate: 16 },
 ] satisfies SideNote[];
 
 const floatingRightNotes = [
-  { text: "Ship mobile build", time: "20:00", top: "11%", rotate: 9 },
-  { text: "Sync with cicd tribe", time: "11:00", top: "28%", rotate: 7, done: true },
-  { text: "Audit workflow jobs", time: "22:00", top: "45%", rotate: 10 },
-  { text: "Monitor test branch", time: "18:00", top: "62%", rotate: 8 },
-  { text: "Close release brief", time: "08:00", top: "79%", rotate: 11, done: true },
-  { text: "Prep next rollout", time: "07:30", top: "94%", rotate: 8 },
+  { text: "Sign up for Ava", time: "10:00", position: "11%", rotate: 18 },
+  { text: "Ship new app", time: "20:00", position: "20%", rotate: 12, done: true },
+  { text: "Buy a new car", time: "12:00", position: "29%", rotate: 11 },
+  { text: "Build something", time: "08:00", position: "38%", rotate: 14, done: true },
+  { text: "Ship new app", time: "20:00", position: "47%", rotate: 12, done: true },
+  { text: "Meet with Ava", time: "16:00", position: "56%", rotate: 14 },
+  { text: "Mountain bike", time: "18:00", position: "65%", rotate: 15 },
+  { text: "Close release", time: "08:00", position: "74%", rotate: 12, done: true },
+  { text: "Prep rollout", time: "07:30", position: "83%", rotate: 14 },
 ] satisfies SideNote[];
+
+
+function FloatingNoteCard({ note }: { note: SideNote }) {
+  return (
+    <div className="min-w-[166px] rounded-[18px] border border-slate-200 bg-white px-3 py-2 shadow-[0_3px_9px_rgba(15,23,42,0.08)]">
+      <div className="flex items-start gap-1.5">
+        <span className="mt-[1px] inline-flex size-3.5 items-center justify-center text-slate-500">
+          {note.done ? (
+            <Check className="size-3.5 stroke-[2.5]" aria-hidden="true" />
+          ) : (
+            <Circle className="size-3.5" aria-hidden="true" />
+          )}
+        </span>
+        <div>
+          <p className="text-[11px] font-medium leading-4 text-slate-900">{note.text}</p>
+          <p className="mt-0.5 pl-[1px] text-[10px] leading-3 text-slate-400">{note.time}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function normalizeScopeString(value: string) {
   return Array.from(
@@ -195,42 +247,56 @@ function LoginContent() {
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#ececef] px-4 py-10 sm:px-6">
-      <div className="pointer-events-none absolute inset-y-0 left-0 hidden w-52 lg:block">
-        {floatingLeftNotes.map((note) => (
+      <div className="pointer-events-none absolute inset-x-0 top-0 hidden h-20 xl:block">
+        {floatingTopNotes.map((note) => (
           <div
-            key={note.text}
-            className="absolute left-[-5.8rem] min-w-[170px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-500 shadow-[0_2px_8px_rgba(15,23,42,0.08)]"
-            style={{ top: note.top, transform: `rotate(${note.rotate}deg)` }}
+            key={`top-${note.text}-${note.position}`}
+            className="absolute -top-8"
+            style={{
+              left: note.position,
+              transform: `translateX(-50%) rotate(${note.rotate}deg)`,
+            }}
           >
-            <div className="flex items-start gap-2">
-              <span className="mt-[2px] inline-flex size-3.5 items-center justify-center rounded-full border border-slate-300 text-[9px] leading-none text-slate-500">
-                {note.done ? "v" : ""}
-              </span>
-              <div>
-                <p className="text-[11px] font-medium leading-4 text-slate-600">{note.text}</p>
-                <p className="mt-0.5 text-[10px] text-slate-400">{note.time}</p>
-              </div>
-            </div>
+            <FloatingNoteCard note={note} />
           </div>
         ))}
       </div>
 
-      <div className="pointer-events-none absolute inset-y-0 right-0 hidden w-52 lg:block">
+      <div className="pointer-events-none absolute inset-y-0 left-0 hidden w-40 xl:block">
+        {floatingLeftNotes.map((note) => (
+          <div
+            key={`left-${note.text}-${note.position}`}
+            className="absolute -left-16"
+            style={{ top: note.position, transform: `rotate(${note.rotate}deg)` }}
+          >
+            <FloatingNoteCard note={note} />
+          </div>
+        ))}
+      </div>
+
+      <div className="pointer-events-none absolute inset-y-0 right-0 hidden w-40 xl:block">
         {floatingRightNotes.map((note) => (
           <div
-            key={note.text}
-            className="absolute right-[-5.8rem] min-w-[170px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-500 shadow-[0_2px_8px_rgba(15,23,42,0.08)]"
-            style={{ top: note.top, transform: `rotate(${note.rotate}deg)` }}
+            key={`right-${note.text}-${note.position}`}
+            className="absolute -right-16"
+            style={{ top: note.position, transform: `rotate(${note.rotate}deg)` }}
           >
-            <div className="flex items-start gap-2">
-              <span className="mt-[2px] inline-flex size-3.5 items-center justify-center rounded-full border border-slate-300 text-[9px] leading-none text-slate-500">
-                {note.done ? "v" : ""}
-              </span>
-              <div>
-                <p className="text-[11px] font-medium leading-4 text-slate-600">{note.text}</p>
-                <p className="mt-0.5 text-[10px] text-slate-400">{note.time}</p>
-              </div>
-            </div>
+            <FloatingNoteCard note={note} />
+          </div>
+        ))}
+      </div>
+
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 hidden h-20 xl:block">
+        {floatingBottomNotes.map((note) => (
+          <div
+            key={`bottom-${note.text}-${note.position}`}
+            className="absolute -bottom-8"
+            style={{
+              left: note.position,
+              transform: `translateX(-50%) rotate(${note.rotate}deg)`,
+            }}
+          >
+            <FloatingNoteCard note={note} />
           </div>
         ))}
       </div>
@@ -269,13 +335,7 @@ function LoginContent() {
             disabled={isLoading}
             onClick={handleGitHubLogin}
           >
-            <svg
-              viewBox="0 0 16 16"
-              aria-hidden="true"
-              className="size-4 fill-current text-white"
-            >
-              <path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.5-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.01.08-2.1 0 0 .67-.21 2.2.82a7.62 7.62 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.09.16 1.9.08 2.1.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
-            </svg>
+            <GitHubMarkIcon className="size-4 fill-current" />
             {isLoading ? "Redirecting to GitHub..." : "Continue with GitHub"}
           </Button>
 
