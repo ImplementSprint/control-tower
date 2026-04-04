@@ -16,6 +16,7 @@ export type DeploymentEnvironment = (typeof deploymentEnvironments)[number];
 export interface Deployment {
   id: string;
   repository: string;
+  tribe: string | null;
   branch: string;
   environment: DeploymentEnvironment;
   status: DeploymentStatus;
@@ -29,6 +30,16 @@ export interface Deployment {
 export interface RepoTribeMap {
   repository: string;
   tribe: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserTribeMembership {
+  id: string;
+  user_id: string;
+  tribe: string;
+  role: "viewer" | "lead" | "platform_admin";
   is_active: boolean;
   created_at: string;
   updated_at: string;

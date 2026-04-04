@@ -13,9 +13,16 @@ create table if not exists public.deployments (
   updated_at timestamptz not null default timezone('utc', now())
 );
 
+alter table public.deployments
+add column if not exists tribe text;
+
+alter table public.deployments
+add column if not exists created_by uuid references auth.users(id) on delete set null;
+
 create index if not exists deployments_created_at_idx on public.deployments (created_at desc);
 create index if not exists deployments_repo_idx on public.deployments (repository);
 create index if not exists deployments_status_idx on public.deployments (status);
+create index if not exists deployments_tribe_idx on public.deployments (tribe);
 
 create or replace function public.set_updated_at_timestamp()
 returns trigger
@@ -43,6 +50,17 @@ create table if not exists public.repo_tribe_map (
   is_active boolean not null default true,
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
+);
+
+create table if not exists public.user_tribe_membership (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  tribe text not null,
+  role text not null default 'viewer' check (role in ('viewer', 'lead', 'platform_admin')),
+  is_active boolean not null default true,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now()),
+  unique (user_id, tribe)
 );
 
 create table if not exists public.github_webhook_events (
@@ -103,6 +121,8 @@ create table if not exists public.workflow_jobs (
 );
 
 create index if not exists repo_tribe_map_tribe_idx on public.repo_tribe_map (tribe);
+create index if not exists user_tribe_membership_user_idx on public.user_tribe_membership (user_id);
+create index if not exists user_tribe_membership_tribe_idx on public.user_tribe_membership (tribe);
 create index if not exists github_webhook_events_event_idx on public.github_webhook_events (event_name, received_at desc);
 create index if not exists github_webhook_events_repository_idx on public.github_webhook_events (repository);
 create index if not exists workflow_runs_repository_idx on public.workflow_runs (repository);
@@ -122,6 +142,12 @@ before update on public.repo_tribe_map
 for each row
 execute function public.set_updated_at_timestamp();
 
+drop trigger if exists user_tribe_membership_set_updated_at on public.user_tribe_membership;
+create trigger user_tribe_membership_set_updated_at
+before update on public.user_tribe_membership
+for each row
+execute function public.set_updated_at_timestamp();
+
 drop trigger if exists workflow_runs_set_updated_at on public.workflow_runs;
 create trigger workflow_runs_set_updated_at
 before update on public.workflow_runs
@@ -135,6 +161,7 @@ for each row
 execute function public.set_updated_at_timestamp();
 
 alter table public.repo_tribe_map enable row level security;
+alter table public.user_tribe_membership enable row level security;
 alter table public.github_webhook_events enable row level security;
 alter table public.workflow_runs enable row level security;
 alter table public.workflow_jobs enable row level security;
@@ -185,3 +212,61 @@ execute function public.set_updated_at_timestamp();
 
 alter table public.policy_rules enable row level security;
 alter table public.audit_events enable row level security;
+
+update public.deployments as d
+set tribe = m.tribe
+from public.repo_tribe_map as m
+where d.tribe is null
+  and m.is_active = true
+  and (
+    m.repository = d.repository
+    or m.repository = split_part(d.repository, '/', 2)
+  );
+
+drop policy if exists user_tribe_membership_read_own on public.user_tribe_membership;
+create policy user_tribe_membership_read_own
+on public.user_tribe_membership
+for select
+using (user_id = auth.uid());
+
+drop policy if exists workflow_runs_read_scoped on public.workflow_runs;
+create policy workflow_runs_read_scoped
+on public.workflow_runs
+for select
+using (
+  exists (
+    select 1
+    from public.user_tribe_membership as m
+    where m.user_id = auth.uid()
+      and m.is_active = true
+      and (m.role = 'platform_admin' or m.tribe = workflow_runs.tribe)
+  )
+);
+
+drop policy if exists workflow_jobs_read_scoped on public.workflow_jobs;
+create policy workflow_jobs_read_scoped
+on public.workflow_jobs
+for select
+using (
+  exists (
+    select 1
+    from public.user_tribe_membership as m
+    where m.user_id = auth.uid()
+      and m.is_active = true
+      and (m.role = 'platform_admin' or m.tribe = workflow_jobs.tribe)
+  )
+);
+
+drop policy if exists deployments_read_scoped on public.deployments;
+create policy deployments_read_scoped
+on public.deployments
+for select
+using (
+  exists (
+    select 1
+    from public.user_tribe_membership as m
+    where m.user_id = auth.uid()
+      and m.is_active = true
+      and (m.role = 'platform_admin' or m.tribe = deployments.tribe)
+  )
+);

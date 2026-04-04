@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getAuthenticatedAccessScope } from "@/lib/auth/access";
 
 const policyRuleTypes = [
   "block_environment",
@@ -21,6 +22,19 @@ const createPolicySchema = z.object({
 
 export async function GET(request: Request) {
   try {
+    const accessScope = await getAuthenticatedAccessScope();
+
+    if (!accessScope) {
+      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+    }
+
+    if (!accessScope.isPlatformAdmin) {
+      return NextResponse.json(
+        { error: "Only platform admins can view policy rules." },
+        { status: 403 },
+      );
+    }
+
     const searchParams = new URL(request.url).searchParams;
     const limitRaw = Number(searchParams.get("limit") ?? "100");
     const limit = Number.isFinite(limitRaw)
@@ -86,6 +100,19 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const accessScope = await getAuthenticatedAccessScope();
+
+    if (!accessScope) {
+      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+    }
+
+    if (!accessScope.isPlatformAdmin) {
+      return NextResponse.json(
+        { error: "Only platform admins can create policy rules." },
+        { status: 403 },
+      );
+    }
+
     const payload = await request.json();
     const parsed = createPolicySchema.safeParse(payload);
 
@@ -111,7 +138,7 @@ export async function POST(request: Request) {
         environment: parsed.data.environment ?? null,
         is_enabled: parsed.data.isEnabled,
         config: parsed.data.config,
-        created_by: parsed.data.createdBy ?? null,
+        created_by: parsed.data.createdBy ?? accessScope.email ?? accessScope.userId,
       })
       .select("id, name, rule_type, repository, tribe, environment, is_enabled, config, created_by, created_at, updated_at")
       .single();

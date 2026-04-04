@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import {
+  getAuthenticatedAccessScope,
+  getScopedTribes,
+} from "@/lib/auth/access";
 
 type TribeMetricRow = {
   tribe: string;
@@ -15,20 +19,38 @@ type TribeMetricRow = {
 
 export async function GET(request: Request) {
   try {
+    const accessScope = await getAuthenticatedAccessScope();
+
+    if (!accessScope) {
+      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+    }
+
     const searchParams = new URL(request.url).searchParams;
     const windowDaysRaw = Number(searchParams.get("windowDays") ?? "14");
     const windowDays = Number.isFinite(windowDaysRaw)
       ? Math.min(Math.max(Math.trunc(windowDaysRaw), 1), 90)
       : 14;
+    const requestedTribe = searchParams.get("tribe")?.trim() ?? null;
+    const scopedTribes = getScopedTribes(accessScope, requestedTribe);
+
+    if (scopedTribes !== null && scopedTribes.length === 0) {
+      return NextResponse.json({ window_days: windowDays, sampled_runs: 0, data: [] });
+    }
 
     const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
     const supabase = createSupabaseAdminClient();
 
-    const { data, error } = await supabase
+    let query = supabase
       .from("workflow_runs")
       .select("tribe, status, duration_seconds, completed_at, created_at")
       .gte("created_at", since)
       .limit(5000);
+
+    if (scopedTribes !== null) {
+      query = query.in("tribe", scopedTribes);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       return NextResponse.json(

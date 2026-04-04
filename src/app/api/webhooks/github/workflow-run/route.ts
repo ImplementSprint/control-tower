@@ -302,6 +302,7 @@ export async function POST(request: Request) {
 			const { error: updateError } = await supabase
 				.from("deployments")
 				.update({
+					tribe,
 					status,
 					summary,
 					duration_seconds: durationSeconds,
@@ -320,6 +321,7 @@ export async function POST(request: Request) {
 		} else {
 			const { error: insertError } = await supabase.from("deployments").insert({
 				repository: repositoryName,
+				tribe,
 				branch,
 				environment,
 				status,

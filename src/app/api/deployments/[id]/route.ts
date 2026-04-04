@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { updateDeploymentSchema } from "@/lib/supabase/types";
+import { getAuthenticatedAccessScope } from "@/lib/auth/access";
 import {
   createAuditEvent,
   evaluateDeploymentMutationPolicies,
@@ -50,6 +51,19 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
+    const accessScope = await getAuthenticatedAccessScope();
+
+    if (!accessScope) {
+      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+    }
+
+    if (!accessScope.isPlatformAdmin) {
+      return NextResponse.json(
+        { error: "Only platform admins can update deployment records." },
+        { status: 403 },
+      );
+    }
+
     const { id } = await params;
 
     if (!id) {
@@ -74,7 +88,7 @@ export async function PATCH(
     const supabase = createSupabaseAdminClient();
     const { data: existingDeployment, error: existingError } = await supabase
       .from("deployments")
-      .select("id, repository, branch, environment, status, summary")
+      .select("id, repository, tribe, branch, environment, status, summary")
       .eq("id", id)
       .single();
 
@@ -129,7 +143,7 @@ export async function PATCH(
       .from("deployments")
       .update(updates)
       .eq("id", id)
-      .select("id, repository, branch, environment, status, summary, commit_sha, duration_seconds, created_at, updated_at")
+      .select("id, repository, tribe, branch, environment, status, summary, commit_sha, duration_seconds, created_at, updated_at")
       .single();
 
     if (error) {
@@ -146,7 +160,7 @@ export async function PATCH(
       await createAuditEvent(supabase, {
         eventType: "deployment.updated",
         source: "api",
-        actor: request.headers.get("x-actor") ?? "anonymous",
+        actor: accessScope.email ?? accessScope.userId,
         actorType: "user",
         repository: data.repository,
         tribe,

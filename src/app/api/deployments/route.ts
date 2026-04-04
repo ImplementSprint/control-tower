@@ -4,6 +4,10 @@ import { z } from "zod";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createDeploymentSchema } from "@/lib/supabase/types";
 import {
+  getAuthenticatedAccessScope,
+  getScopedTribes,
+} from "@/lib/auth/access";
+import {
   createAuditEvent,
   evaluateDeploymentMutationPolicies,
   resolveTribeForRepository,
@@ -45,19 +49,37 @@ const requestSchema = createDeploymentSchema.extend({
 
 export async function GET(request: Request) {
   try {
+    const accessScope = await getAuthenticatedAccessScope();
+
+    if (!accessScope) {
+      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+    }
+
     const searchParams = new URL(request.url).searchParams;
     const limitParam = Number(searchParams.get("limit") ?? "20");
     const limit = Number.isFinite(limitParam)
       ? Math.min(Math.max(Math.trunc(limitParam), 1), 100)
       : 20;
+    const requestedTribe = searchParams.get("tribe")?.trim() ?? null;
+    const scopedTribes = getScopedTribes(accessScope, requestedTribe);
+
+    if (scopedTribes !== null && scopedTribes.length === 0) {
+      return NextResponse.json({ data: [] });
+    }
 
     const supabase = createSupabaseAdminClient();
 
-    const { data, error } = await supabase
+    let query = supabase
       .from("deployments")
-      .select("id, repository, branch, environment, status, summary, commit_sha, duration_seconds, created_at, updated_at")
+      .select("id, repository, tribe, branch, environment, status, summary, commit_sha, duration_seconds, created_at, updated_at")
       .order("created_at", { ascending: false })
       .limit(limit);
+
+    if (scopedTribes !== null) {
+      query = query.in("tribe", scopedTribes);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       return NextResponse.json(
@@ -83,6 +105,19 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const accessScope = await getAuthenticatedAccessScope();
+
+    if (!accessScope) {
+      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+    }
+
+    if (!accessScope.isPlatformAdmin) {
+      return NextResponse.json(
+        { error: "Only platform admins can create deployment records." },
+        { status: 403 },
+      );
+    }
+
     const payload = await request.json();
     const parsed = requestSchema.safeParse(payload);
 
@@ -120,14 +155,16 @@ export async function POST(request: Request) {
       .from("deployments")
       .insert({
         repository: parsed.data.repository,
+        tribe,
         branch: parsed.data.branch,
         environment: parsed.data.environment,
         status: parsed.data.status,
         summary: parsed.data.summary ?? null,
         commit_sha: parsed.data.commitSha ?? null,
         duration_seconds: parsed.data.durationSeconds ?? null,
+        created_by: accessScope.userId,
       })
-      .select("id, repository, branch, environment, status, summary, commit_sha, duration_seconds, created_at, updated_at")
+      .select("id, repository, tribe, branch, environment, status, summary, commit_sha, duration_seconds, created_at, updated_at")
       .single();
 
     if (error) {
@@ -145,7 +182,7 @@ export async function POST(request: Request) {
       await createAuditEvent(supabase, {
         eventType: "deployment.created",
         source: "api",
-        actor: request.headers.get("x-actor") ?? "anonymous",
+        actor: accessScope.email ?? accessScope.userId,
         actorType: "user",
         repository: data.repository,
         tribe,

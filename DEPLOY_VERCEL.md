@@ -14,8 +14,10 @@ This application is a single Next.js fullstack app. Deploy it directly to Vercel
 Set these in Vercel Project Settings -> Environment Variables:
 
 - NEXT_PUBLIC_SUPABASE_URL
+- NEXT_PUBLIC_SITE_URL
 - NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 - SUPABASE_SECRET_KEY
+- GITHUB_ALLOWED_ORG (default `ImplementSprint`)
 - GITHUB_WEBHOOK_SECRET
 - TRIBE_REPO_MAP_JSON (optional)
 - INGESTION_TOKEN
@@ -27,6 +29,14 @@ Notes:
 - NEXT_PUBLIC_* variables are exposed to browser code.
 - SUPABASE_SECRET_KEY is server-only and must never be exposed to client components.
 - Legacy aliases still supported by this app: `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`.
+
+OAuth setup:
+
+1. In Supabase dashboard, enable GitHub provider in Auth -> Providers.
+2. Configure GitHub OAuth app callback URL:
+	- `https://<your-project>.vercel.app/auth/callback`
+3. Add the same URL in Supabase redirect allow-list.
+4. Ensure GitHub scope includes `read:org` so org membership can be validated.
 
 ## 3) Build Settings
 
@@ -40,14 +50,26 @@ Before first production use, run SQL from supabase/schema.sql in Supabase SQL ed
 
 If your deployment was already initialized earlier, run schema.sql again to apply telemetry tables (`workflow_runs`, `github_webhook_events`, `repo_tribe_map`).
 Latest schema also includes `workflow_jobs`, `policy_rules`, and `audit_events` for governance and gate-level telemetry.
+It now also includes `user_tribe_membership` and tribe-scoped read policies.
+
+After running schema, seed user access rows:
+
+```sql
+insert into public.user_tribe_membership (user_id, tribe, role)
+values
+	('<supabase-auth-user-uuid>', 'cicd', 'viewer');
+```
+
+Use `platform_admin` role for override-capable users.
 
 ## 5) Verify Deployment
 
 After deploy:
 
 1. Open the root page.
-2. Create a deployment record from the form.
-3. Confirm record appears in Recent Deployments.
+2. Sign in via GitHub.
+3. Confirm user only sees assigned tribe data.
+4. (Optional admin user) Create or update deployment records.
 
 If data does not load, verify Supabase environment variables and schema setup.
 

@@ -13,8 +13,9 @@ Fullstack Next.js application designed for Vercel deployment, using shadcn/ui fo
 ## Features
 
 - Dashboard metrics for deployments
-- Create deployment records via API route
-- Update deployment status via API route
+- GitHub OAuth login with organization restriction
+- Tribe-scoped read visibility (users only see assigned tribes)
+- Admin-only deployment create/update overrides
 - Supabase-backed persistence with typed validation
 - Normalized workflow run and job ingestion from GitHub Actions
 - Policy rules + immutable audit event APIs
@@ -36,8 +37,10 @@ cp .env.example .env.local
 3. Set values in .env.local:
 
 - NEXT_PUBLIC_SUPABASE_URL
+- NEXT_PUBLIC_SITE_URL
 - NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 - SUPABASE_SECRET_KEY
+- GITHUB_ALLOWED_ORG (default `ImplementSprint`)
 - GITHUB_WEBHOOK_SECRET (for GitHub webhook signature verification)
 - TRIBE_REPO_MAP_JSON (optional explicit repo-to-tribe mapping)
 - INGESTION_TOKEN (required to protect sync endpoint)
@@ -47,6 +50,12 @@ cp .env.example .env.local
 Compatibility notes:
 1. `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are also accepted.
 2. `SUPABASE_SERVICE_ROLE_KEY` is also accepted as a legacy alias for `SUPABASE_SECRET_KEY`.
+
+Auth + access notes:
+1. Sign-in is via GitHub OAuth at `/auth/login`.
+2. Users must be members of `GITHUB_ALLOWED_ORG`.
+3. Tribe access is controlled by `user_tribe_membership` rows.
+4. Deployment create/update APIs are reserved for `platform_admin` users.
 
 Tribe ownership resolution order:
 1. `TRIBE_REPO_MAP_JSON` explicit mapping.
@@ -58,9 +67,22 @@ Tribe ownership resolution order:
 
 - supabase/schema.sql
 
-If you already ran schema.sql before, run it again to apply new telemetry tables used by webhook ingestion.
+If you already ran schema.sql before, run it again to apply:
+1. new telemetry tables used by webhook ingestion.
+2. `user_tribe_membership` access table.
+3. RLS policies for tribe-scoped read access.
 
-5. Start development server:
+5. Seed access mapping (example SQL):
+
+```sql
+insert into public.user_tribe_membership (user_id, tribe, role)
+values
+	('<supabase-auth-user-uuid>', 'cicd', 'viewer');
+```
+
+Use role `platform_admin` for admins who need override capabilities.
+
+6. Start development server:
 
 ```bash
 npm run dev
@@ -71,8 +93,8 @@ Open http://localhost:3000.
 ## API Endpoints
 
 - GET /api/deployments
-- POST /api/deployments
-- PATCH /api/deployments/:id
+- POST /api/deployments (platform_admin only)
+- PATCH /api/deployments/:id (platform_admin only)
 - GET /api/workflow-runs
 - GET /api/workflow-jobs
 - GET /api/metrics/tribes

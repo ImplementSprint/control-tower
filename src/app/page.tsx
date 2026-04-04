@@ -7,6 +7,7 @@ import {
   Settings,
   Users,
 } from "lucide-react";
+import { redirect } from "next/navigation";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Card,
@@ -17,6 +18,10 @@ import {
 } from "@/components/ui/card";
 import { NewDeploymentForm } from "@/components/new-deployment-form";
 import { StatusBadge } from "@/components/status-badge";
+import {
+  getAuthenticatedAccessScope,
+  type AccessScope,
+} from "@/lib/auth/access";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type { Deployment, DeploymentStatus } from "@/lib/supabase/types";
 
@@ -31,14 +36,27 @@ type TribeHealthRow = {
 
 export const dynamic = "force-dynamic";
 
-async function getDeployments() {
+async function getDeployments(scope: AccessScope) {
   try {
+    if (!scope.isPlatformAdmin && scope.tribes.length === 0) {
+      return {
+        deployments: [] as Deployment[],
+        error: null,
+      };
+    }
+
     const supabase = createSupabaseAdminClient();
-    const { data, error } = await supabase
+    let query = supabase
       .from("deployments")
-      .select("id, repository, branch, environment, status, summary, commit_sha, duration_seconds, created_at, updated_at")
+      .select("id, repository, tribe, branch, environment, status, summary, commit_sha, duration_seconds, created_at, updated_at")
       .order("created_at", { ascending: false })
       .limit(30);
+
+    if (!scope.isPlatformAdmin) {
+      query = query.in("tribe", scope.tribes);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       return {
@@ -221,18 +239,31 @@ function getNextAction(deployment: Deployment) {
   return "Prepare promotion";
 }
 
-async function getTribeHealth(windowDays = 14) {
+async function getTribeHealth(scope: AccessScope, windowDays = 14) {
   try {
+    if (!scope.isPlatformAdmin && scope.tribes.length === 0) {
+      return {
+        rows: [] as TribeHealthRow[],
+        error: null,
+      };
+    }
+
     const supabase = createSupabaseAdminClient();
     const since = new Date(
       Date.now() - windowDays * 24 * 60 * 60 * 1000,
     ).toISOString();
 
-    const { data, error } = await supabase
+    let query = supabase
       .from("workflow_runs")
       .select("tribe, status, duration_seconds, created_at")
       .gte("created_at", since)
       .limit(5000);
+
+    if (!scope.isPlatformAdmin) {
+      query = query.in("tribe", scope.tribes);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       return {
@@ -320,10 +351,17 @@ async function getTribeHealth(windowDays = 14) {
 }
 
 export default async function Home() {
+  const accessScope = await getAuthenticatedAccessScope();
+
+  if (!accessScope) {
+    redirect("/auth/login?next=/");
+  }
+
   const [{ deployments, error }, { rows: tribeHealth, error: tribeHealthError }] =
-    await Promise.all([getDeployments(), getTribeHealth(14)]);
+    await Promise.all([getDeployments(accessScope), getTribeHealth(accessScope, 14)]);
   const metrics = getMetrics(deployments);
   const reliabilityBand = getReliabilityBand(metrics.successRate);
+  const hasTribeAccess = accessScope.isPlatformAdmin || accessScope.tribes.length > 0;
 
   const progress = Math.max(0, Math.min(100, metrics.successRate));
   const trendBars = (tribeHealth.length > 0
@@ -349,9 +387,9 @@ export default async function Home() {
             </div>
             <div className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-card px-3 py-1.5 shadow-sm">
               <span className="inline-flex size-7 items-center justify-center rounded-full bg-emerald-100 text-xs font-semibold text-emerald-800">
-                AJ
+                {(accessScope.email?.slice(0, 2) ?? "CT").toUpperCase()}
               </span>
-              <span className="text-sm font-medium">Alex Jones</span>
+              <span className="text-sm font-medium">{accessScope.email ?? "Signed in"}</span>
               <ChevronDown className="size-4 text-muted-foreground" />
             </div>
             <div className="inline-flex size-10 items-center justify-center rounded-full border border-border/70 bg-card text-muted-foreground">
@@ -373,8 +411,25 @@ export default async function Home() {
             <div className="inline-flex size-10 items-center justify-center rounded-full border border-border/70 bg-card text-muted-foreground">
               <Settings className="size-4" />
             </div>
+            <form action="/api/auth/logout" method="post">
+              <button
+                type="submit"
+                className="inline-flex items-center rounded-full border border-border/70 bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+              >
+                Logout
+              </button>
+            </form>
           </div>
         </header>
+
+        {!hasTribeAccess ? (
+          <Alert>
+            <AlertTitle>No Tribe Access Assigned</AlertTitle>
+            <AlertDescription>
+              Your account is authenticated but has no active tribe membership. Ask a platform admin to add your user to user_tribe_membership.
+            </AlertDescription>
+          </Alert>
+        ) : null}
 
         {error ? (
           <Alert variant="destructive">
@@ -543,12 +598,14 @@ export default async function Home() {
                 Live delivery activity grouped by repository and deployment state
               </p>
             </div>
-            <a
-              href="#manual-entry"
-              className="inline-flex items-center rounded-full border border-border/70 bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
-            >
-              Add deployment
-            </a>
+            {accessScope.isPlatformAdmin ? (
+              <a
+                href="#manual-entry"
+                className="inline-flex items-center rounded-full border border-border/70 bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+              >
+                Add deployment
+              </a>
+            ) : null}
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -624,7 +681,7 @@ export default async function Home() {
                         </td>
                         <td className="px-4 py-3.5">
                           <span className="inline-flex rounded-full border border-border/70 bg-background px-2.5 py-1 text-xs font-medium text-foreground">
-                            {deriveTribe(deployment.repository)}
+                            {deployment.tribe ?? deriveTribe(deployment.repository)}
                           </span>
                         </td>
                       </tr>
@@ -636,24 +693,26 @@ export default async function Home() {
           </div>
         </section>
 
-        <section id="manual-entry" className="space-y-2">
-          <details className="rounded-[24px] border border-border/70 bg-card/95 p-4">
-            <summary className="cursor-pointer list-none text-sm font-semibold text-foreground">
-              Manual entry
-            </summary>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Insert a deployment record for incident replay and governance checks.
-            </p>
-            <div className="mt-4">
-              <NewDeploymentForm />
-            </div>
-          </details>
+        {accessScope.isPlatformAdmin ? (
+          <section id="manual-entry" className="space-y-2">
+            <details className="rounded-[24px] border border-border/70 bg-card/95 p-4">
+              <summary className="cursor-pointer list-none text-sm font-semibold text-foreground">
+                Manual entry
+              </summary>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Insert a deployment record for incident replay and governance checks.
+              </p>
+              <div className="mt-4">
+                <NewDeploymentForm />
+              </div>
+            </details>
 
-          <p className="text-xs text-muted-foreground">
-            Reliability band: <span className="font-medium text-foreground">{reliabilityBand}</span>
-            . Average runtime: <span className="font-medium text-foreground">{metrics.averageDuration}s</span>.
-          </p>
-        </section>
+            <p className="text-xs text-muted-foreground">
+              Reliability band: <span className="font-medium text-foreground">{reliabilityBand}</span>
+              . Average runtime: <span className="font-medium text-foreground">{metrics.averageDuration}s</span>.
+            </p>
+          </section>
+        ) : null}
       </main>
     </div>
   );

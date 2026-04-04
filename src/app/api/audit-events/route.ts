@@ -1,8 +1,18 @@
 import { NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import {
+  getAuthenticatedAccessScope,
+  getScopedTribes,
+} from "@/lib/auth/access";
 
 export async function GET(request: Request) {
   try {
+    const accessScope = await getAuthenticatedAccessScope();
+
+    if (!accessScope) {
+      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+    }
+
     const searchParams = new URL(request.url).searchParams;
     const limitRaw = Number(searchParams.get("limit") ?? "100");
     const limit = Number.isFinite(limitRaw)
@@ -10,7 +20,13 @@ export async function GET(request: Request) {
       : 100;
 
     const repository = searchParams.get("repository")?.trim();
-    const tribe = searchParams.get("tribe")?.trim();
+    const tribe = searchParams.get("tribe")?.trim() ?? null;
+    const scopedTribes = getScopedTribes(accessScope, tribe);
+
+    if (scopedTribes !== null && scopedTribes.length === 0) {
+      return NextResponse.json({ data: [] });
+    }
+
     const eventType = searchParams.get("eventType")?.trim();
     const source = searchParams.get("source")?.trim();
 
@@ -26,8 +42,8 @@ export async function GET(request: Request) {
       query = query.eq("repository", repository);
     }
 
-    if (tribe) {
-      query = query.eq("tribe", tribe);
+    if (scopedTribes !== null) {
+      query = query.in("tribe", scopedTribes);
     }
 
     if (eventType) {

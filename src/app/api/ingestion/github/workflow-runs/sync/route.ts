@@ -388,6 +388,7 @@ async function upsertWorkflowRunFromSync(
     const { error: updateError } = await supabase
       .from("deployments")
       .update({
+        tribe,
         status,
         summary,
         duration_seconds: durationSeconds,
@@ -400,6 +401,7 @@ async function upsertWorkflowRunFromSync(
   } else {
     const { error: insertError } = await supabase.from("deployments").insert({
       repository,
+      tribe,
       branch,
       environment,
       status,
