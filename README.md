@@ -36,13 +36,17 @@ cp .env.example .env.local
 3. Set values in .env.local:
 
 - NEXT_PUBLIC_SUPABASE_URL
-- NEXT_PUBLIC_SUPABASE_ANON_KEY
-- SUPABASE_SERVICE_ROLE_KEY
+- NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+- SUPABASE_SECRET_KEY
 - GITHUB_WEBHOOK_SECRET (for GitHub webhook signature verification)
 - TRIBE_REPO_MAP_JSON (optional explicit repo-to-tribe mapping)
 - INGESTION_TOKEN (required to protect sync endpoint)
 - GITHUB_TOKEN (or GH_TOKEN) for GitHub Actions API backfill
 - GITHUB_REPOS_JSON or GITHUB_REPOS_CSV (optional default repo list)
+
+Compatibility notes:
+1. `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are also accepted.
+2. `SUPABASE_SERVICE_ROLE_KEY` is also accepted as a legacy alias for `SUPABASE_SECRET_KEY`.
 
 Tribe ownership resolution order:
 1. `TRIBE_REPO_MAP_JSON` explicit mapping.

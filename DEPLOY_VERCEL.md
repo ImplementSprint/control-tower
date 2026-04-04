@@ -14,8 +14,8 @@ This application is a single Next.js fullstack app. Deploy it directly to Vercel
 Set these in Vercel Project Settings -> Environment Variables:
 
 - NEXT_PUBLIC_SUPABASE_URL
-- NEXT_PUBLIC_SUPABASE_ANON_KEY
-- SUPABASE_SERVICE_ROLE_KEY
+- NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+- SUPABASE_SECRET_KEY
 - GITHUB_WEBHOOK_SECRET
 - TRIBE_REPO_MAP_JSON (optional)
 - INGESTION_TOKEN
@@ -25,7 +25,8 @@ Set these in Vercel Project Settings -> Environment Variables:
 Notes:
 
 - NEXT_PUBLIC_* variables are exposed to browser code.
-- SUPABASE_SERVICE_ROLE_KEY is server-only and must never be exposed to client components.
+- SUPABASE_SECRET_KEY is server-only and must never be exposed to client components.
+- Legacy aliases still supported by this app: `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY`.
 
 ## 3) Build Settings
 
