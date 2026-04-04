@@ -62,7 +62,7 @@ function LoginContent() {
         provider: "github",
         options: {
           redirectTo: redirectTo.toString(),
-          scopes: "read:org user:email",
+          scopes: "read:org user:email read:user",
           skipBrowserRedirect: true,
         },
       });

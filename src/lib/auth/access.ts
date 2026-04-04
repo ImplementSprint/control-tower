@@ -12,6 +12,10 @@ export type AccessScope = {
   tribes: string[];
   roles: string[];
   isPlatformAdmin: boolean;
+  githubUsername: string | null;
+  githubDisplayName: string | null;
+  githubAvatarUrl: string | null;
+  githubProfileUrl: string | null;
 };
 
 function normalizeRole(value: unknown) {
@@ -103,11 +107,55 @@ export async function getAuthenticatedAccessScope(): Promise<AccessScope | null>
     tribes.push(metadataTribe);
   }
 
+  const githubIdentity = user.identities?.find(
+    (identity) => identity.provider === "github",
+  );
+  const identityData =
+    githubIdentity?.identity_data && typeof githubIdentity.identity_data === "object"
+      ? (githubIdentity.identity_data as Record<string, unknown>)
+      : undefined;
+
+  const metadata =
+    user.user_metadata && typeof user.user_metadata === "object"
+      ? (user.user_metadata as Record<string, unknown>)
+      : undefined;
+
+  const githubUsername =
+    (typeof metadata?.user_name === "string" && metadata.user_name) ||
+    (typeof metadata?.preferred_username === "string" && metadata.preferred_username) ||
+    (typeof identityData?.user_name === "string" && identityData.user_name) ||
+    null;
+
+  const githubDisplayName =
+    (typeof metadata?.name === "string" && metadata.name) ||
+    (typeof metadata?.full_name === "string" && metadata.full_name) ||
+    (typeof identityData?.name === "string" && identityData.name) ||
+    githubUsername ||
+    user.email ||
+    null;
+
+  const githubAvatarUrl =
+    (typeof metadata?.avatar_url === "string" && metadata.avatar_url) ||
+    (typeof metadata?.picture === "string" && metadata.picture) ||
+    (typeof identityData?.avatar_url === "string" && identityData.avatar_url) ||
+    null;
+
+  const githubProfileUrl =
+    (typeof metadata?.profile_url === "string" && metadata.profile_url) ||
+    (typeof metadata?.html_url === "string" && metadata.html_url) ||
+    (typeof identityData?.profile_url === "string" && identityData.profile_url) ||
+    (typeof identityData?.html_url === "string" && identityData.html_url) ||
+    null;
+
   return {
     userId: user.id,
     email: user.email ?? null,
     tribes,
     roles,
     isPlatformAdmin: roles.includes("platform_admin"),
+    githubUsername,
+    githubDisplayName,
+    githubAvatarUrl,
+    githubProfileUrl,
   };
 }
