@@ -17,8 +17,10 @@ Set these in Vercel Project Settings -> Environment Variables:
 - NEXT_PUBLIC_SITE_URL
 - NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 - SUPABASE_SECRET_KEY
+- GITHUB_REQUIRE_ORG_MEMBERSHIP (default `false`)
 - NEXT_PUBLIC_GITHUB_OAUTH_SCOPES (default `user:email`)
-- GITHUB_ALLOWED_ORG (optional, comma-separated)
+- NEXT_PUBLIC_GITHUB_REQUIRE_ORG_MEMBERSHIP (default `false`)
+- GITHUB_ALLOWED_ORG (optional, comma-separated; required only when org gate is enabled)
 - GITHUB_WEBHOOK_SECRET
 - TRIBE_REPO_MAP_JSON (optional)
 - INGESTION_TOKEN
@@ -40,7 +42,8 @@ OAuth setup:
 	- `https://<your-project>.vercel.app/auth/callback`
 	- `http://localhost:3000/auth/callback` (for local dev)
 4. Keep OAuth scopes minimal (`user:email`) unless you explicitly enforce org membership.
-5. If `GITHUB_ALLOWED_ORG` is set, include `read:org` in `NEXT_PUBLIC_GITHUB_OAUTH_SCOPES`.
+5. To enforce org membership, define `GITHUB_ALLOWED_ORG` (or set `GITHUB_REQUIRE_ORG_MEMBERSHIP=true`).
+6. If org enforcement is enabled, include `read:org` in `NEXT_PUBLIC_GITHUB_OAUTH_SCOPES`.
 
 Enterprise recommendation:
 

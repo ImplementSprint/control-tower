@@ -76,7 +76,21 @@ export async function GET(request: Request) {
     .map((org) => org.trim())
     .filter((org) => org.length > 0);
 
-  if (requiredOrgs.length > 0) {
+  const explicitEnforceToggle =
+    (process.env.GITHUB_REQUIRE_ORG_MEMBERSHIP ?? "false").trim().toLowerCase() ===
+    "true";
+
+  // Enforce org policy when explicitly enabled OR when allowed orgs are configured.
+  const enforceOrgPolicy = explicitEnforceToggle || requiredOrgs.length > 0;
+
+  if (enforceOrgPolicy && requiredOrgs.length === 0) {
+    await supabase.auth.signOut();
+    const redirectUrl = new URL("/auth/login", url.origin);
+    redirectUrl.searchParams.set("error", "org_policy_misconfigured");
+    return NextResponse.redirect(redirectUrl);
+  }
+
+  if (enforceOrgPolicy && requiredOrgs.length > 0) {
     const providerToken = data.session.provider_token;
 
     if (!providerToken) {

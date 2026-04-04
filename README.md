@@ -40,8 +40,10 @@ cp .env.example .env.local
 - NEXT_PUBLIC_SITE_URL
 - NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 - SUPABASE_SECRET_KEY
+- GITHUB_REQUIRE_ORG_MEMBERSHIP (default `false`)
 - NEXT_PUBLIC_GITHUB_OAUTH_SCOPES (default `user:email`)
-- GITHUB_ALLOWED_ORG (optional, comma-separated for org-gated login)
+- NEXT_PUBLIC_GITHUB_REQUIRE_ORG_MEMBERSHIP (default `false`)
+- GITHUB_ALLOWED_ORG (optional, comma-separated; required only when org gate is enabled)
 - GITHUB_WEBHOOK_SECRET (for GitHub webhook signature verification)
 - TRIBE_REPO_MAP_JSON (optional explicit repo-to-tribe mapping)
 - INGESTION_TOKEN (required to protect sync endpoint)
@@ -55,8 +57,9 @@ Compatibility notes:
 Auth + access notes:
 1. Sign-in is via GitHub OAuth at `/auth/login`.
 2. OAuth uses `NEXT_PUBLIC_GITHUB_OAUTH_SCOPES` (minimal default: `user:email`).
-3. If `GITHUB_ALLOWED_ORG` is set, users must belong to one of those orgs.
-4. If `GITHUB_ALLOWED_ORG` is empty, org-based gating is disabled.
+3. Org-based gating is enabled automatically when `GITHUB_ALLOWED_ORG` is set (or explicitly via `GITHUB_REQUIRE_ORG_MEMBERSHIP=true`).
+4. When org gating is enabled, include `read:org` in `NEXT_PUBLIC_GITHUB_OAUTH_SCOPES`.
+5. When org gating is disabled (default), login uses minimal scopes and no org membership checks.
 5. Tribe access is controlled by `user_tribe_membership` rows.
 6. Deployment create/update APIs are reserved for `platform_admin` users.
 
