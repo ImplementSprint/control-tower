@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/server";
+import { createServerClient } from "@supabase/ssr";
+import { cookies } from "next/headers";
+
+type SupabaseRouteContext = {
+  supabase: ReturnType<typeof createServerClient>;
+  sessionResponse: NextResponse;
+};
 
 function resolveSafeNextPath(rawNext: string | null) {
   if (!rawNext) {
@@ -51,6 +57,51 @@ async function isAllowedGithubOrgMember(providerToken: string, org: string) {
   };
 }
 
+async function createSupabaseRouteContext(): Promise<SupabaseRouteContext> {
+  const cookieStore = await cookies();
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL;
+  const publishableKey =
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY ??
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !publishableKey) {
+    throw new Error(
+      "Missing Supabase public environment variables for OAuth callback.",
+    );
+  }
+
+  const sessionResponse = NextResponse.next();
+  const supabase = createServerClient(supabaseUrl, publishableKey, {
+    cookies: {
+      getAll() {
+        return cookieStore.getAll();
+      },
+      setAll(cookiesToSet) {
+        cookiesToSet.forEach(({ name, value, options }) => {
+          cookieStore.set(name, value, options);
+          sessionResponse.cookies.set(name, value, options);
+        });
+      },
+    },
+  });
+
+  return {
+    supabase,
+    sessionResponse,
+  };
+}
+
+function redirectWithSessionCookies(sessionResponse: NextResponse, redirectUrl: URL) {
+  const redirectResponse = NextResponse.redirect(redirectUrl);
+
+  for (const cookie of sessionResponse.cookies.getAll()) {
+    redirectResponse.cookies.set(cookie.name, cookie.value, cookie);
+  }
+
+  return redirectResponse;
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
@@ -62,13 +113,13 @@ export async function GET(request: Request) {
     return NextResponse.redirect(redirectUrl);
   }
 
-  const supabase = await createClient();
+  const { supabase, sessionResponse } = await createSupabaseRouteContext();
   const { data, error } = await supabase.auth.exchangeCodeForSession(code);
 
   if (error || !data.session) {
     const redirectUrl = new URL("/auth/login", url.origin);
     redirectUrl.searchParams.set("error", "oauth_exchange_failed");
-    return NextResponse.redirect(redirectUrl);
+    return redirectWithSessionCookies(sessionResponse, redirectUrl);
   }
 
   const requiredOrgs = (process.env.GITHUB_ALLOWED_ORG ?? "")
@@ -87,7 +138,7 @@ export async function GET(request: Request) {
     await supabase.auth.signOut();
     const redirectUrl = new URL("/auth/login", url.origin);
     redirectUrl.searchParams.set("error", "org_policy_misconfigured");
-    return NextResponse.redirect(redirectUrl);
+    return redirectWithSessionCookies(sessionResponse, redirectUrl);
   }
 
   if (enforceOrgPolicy && requiredOrgs.length > 0) {
@@ -97,7 +148,7 @@ export async function GET(request: Request) {
       await supabase.auth.signOut();
       const redirectUrl = new URL("/auth/login", url.origin);
       redirectUrl.searchParams.set("error", "github_scope_missing");
-      return NextResponse.redirect(redirectUrl);
+      return redirectWithSessionCookies(sessionResponse, redirectUrl);
     }
 
     try {
@@ -125,16 +176,16 @@ export async function GET(request: Request) {
           "error",
           scopeMissing ? "github_scope_missing" : "org_membership_required",
         );
-        return NextResponse.redirect(redirectUrl);
+        return redirectWithSessionCookies(sessionResponse, redirectUrl);
       }
     } catch {
       await supabase.auth.signOut();
       const redirectUrl = new URL("/auth/login", url.origin);
       redirectUrl.searchParams.set("error", "org_check_failed");
-      return NextResponse.redirect(redirectUrl);
+      return redirectWithSessionCookies(sessionResponse, redirectUrl);
     }
   }
 
   const redirectUrl = new URL(nextPath, url.origin);
-  return NextResponse.redirect(redirectUrl);
+  return redirectWithSessionCookies(sessionResponse, redirectUrl);
 }

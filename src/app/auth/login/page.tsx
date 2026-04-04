@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { ShieldCheck } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -110,6 +110,23 @@ function LoginContent() {
     () => getSafeNextPath(searchParams.get("next")),
     [searchParams],
   );
+
+  useEffect(() => {
+    if (!isLoading) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setIsLoading(false);
+      setError(
+        "GitHub sign-in did not complete in time. Retry and ensure popups/redirects are allowed in this browser.",
+      );
+    }, 12000);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [isLoading]);
 
   async function handleGitHubLogin() {
     setError(null);
