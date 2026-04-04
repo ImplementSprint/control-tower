@@ -1,4 +1,5 @@
 import { LayoutDashboard } from "lucide-react";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -14,7 +15,11 @@ import {
   type AccessScope,
 } from "@/lib/auth/access";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import type { Deployment, DeploymentStatus } from "@/lib/supabase/types";
+import type {
+  Deployment,
+  DeploymentStatus,
+  WorkflowRun,
+} from "@/lib/supabase/types";
 
 type TribeHealthRow = {
   tribe: string;
@@ -149,6 +154,53 @@ async function getDeployments(scope: AccessScope) {
         error instanceof Error
           ? error.message
           : "Unexpected error while loading dashboard data.",
+    };
+  }
+}
+
+async function getWorkflowRuns(scope: AccessScope) {
+  try {
+    if (!scope.isPlatformAdmin && scope.tribes.length === 0) {
+      return {
+        runs: [] as WorkflowRun[],
+        error: null,
+      };
+    }
+
+    const supabase = createSupabaseAdminClient();
+    let query = supabase
+      .from("workflow_runs")
+      .select(
+        "id, repository, run_id, run_attempt, workflow_name, branch, environment, tribe, status, github_status, github_conclusion, event_name, action, run_url, commit_sha, started_at, completed_at, duration_seconds, created_at, updated_at",
+      )
+      .order("completed_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .limit(80);
+
+    if (!scope.isPlatformAdmin) {
+      query = query.in("tribe", scope.tribes);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      return {
+        runs: [] as WorkflowRun[],
+        error: "Unable to load workflow runs for the runs tab.",
+      };
+    }
+
+    return {
+      runs: (data ?? []) as WorkflowRun[],
+      error: null,
+    };
+  } catch (error) {
+    return {
+      runs: [] as WorkflowRun[],
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unexpected error while loading workflow runs.",
     };
   }
 }
@@ -288,6 +340,30 @@ function filterDeployments(deployments: Deployment[], focus: FocusFilter) {
   return deployments;
 }
 
+function filterWorkflowRuns(runs: WorkflowRun[], focus: FocusFilter) {
+  if (focus === "new") {
+    return runs.filter(
+      (item) => item.status === "queued" || item.status === "running",
+    );
+  }
+
+  if (focus === "high-priority") {
+    return runs.filter((item) => item.status === "failed");
+  }
+
+  if (focus === "at-risk") {
+    return runs.filter(
+      (item) => item.status === "failed" || item.status === "cancelled",
+    );
+  }
+
+  if (focus === "closing-soon") {
+    return runs.filter((item) => item.status === "success");
+  }
+
+  return runs;
+}
+
 function formatRuntime(seconds: number | null) {
   if (seconds === null || Number.isNaN(seconds)) {
     return "-";
@@ -417,6 +493,26 @@ function getNextAction(deployment: Deployment) {
   return "Ready for promotion";
 }
 
+function getRunNextAction(run: WorkflowRun) {
+  if (run.status === "failed") {
+    return "Open failed jobs";
+  }
+
+  if (run.status === "running") {
+    return "Track active jobs";
+  }
+
+  if (run.status === "queued") {
+    return "Await runner allocation";
+  }
+
+  if (run.github_conclusion === "cancelled") {
+    return "Investigate cancellation";
+  }
+
+  return "Review run output";
+}
+
 export default async function Home({ searchParams }: HomePageProps) {
   const accessScope = await getAuthenticatedAccessScope();
 
@@ -428,10 +524,18 @@ export default async function Home({ searchParams }: HomePageProps) {
   const currentTab = normalizeTab(getSingleParam(resolvedParams.tab));
   const focusFilter = normalizeFocusFilter(getSingleParam(resolvedParams.focus));
 
-  const [{ deployments, error }, { rows: tribeHealth, error: tribeHealthError }] =
-    await Promise.all([getDeployments(accessScope), getTribeHealth(accessScope, 14)]);
+  const [
+    { deployments, error },
+    { runs: workflowRuns, error: workflowRunsError },
+    { rows: tribeHealth, error: tribeHealthError },
+  ] = await Promise.all([
+    getDeployments(accessScope),
+    getWorkflowRuns(accessScope),
+    getTribeHealth(accessScope, 14),
+  ]);
 
   const filteredDeployments = filterDeployments(deployments, focusFilter);
+  const filteredWorkflowRuns = filterWorkflowRuns(workflowRuns, focusFilter);
   const metrics = getMetrics(deployments);
   const reliabilityBand = getReliabilityBand(metrics.successRate);
   const hasTribeAccess = accessScope.isPlatformAdmin || accessScope.tribes.length > 0;
@@ -451,13 +555,21 @@ export default async function Home({ searchParams }: HomePageProps) {
       ? accessScope.tribes.join(", ")
       : "No tribe assignment";
 
-  const focusItems =
+  const deploymentFocusItems =
     filteredDeployments.filter((item) => item.status === "failed" || item.status === "running")
       .length > 0
       ? filteredDeployments
           .filter((item) => item.status === "failed" || item.status === "running")
           .slice(0, 4)
       : filteredDeployments.slice(0, 4);
+
+  const runFocusItems =
+    filteredWorkflowRuns.filter((item) => item.status === "failed" || item.status === "running")
+      .length > 0
+      ? filteredWorkflowRuns
+          .filter((item) => item.status === "failed" || item.status === "running")
+          .slice(0, 4)
+      : filteredWorkflowRuns.slice(0, 4);
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-background">
@@ -550,6 +662,13 @@ export default async function Home({ searchParams }: HomePageProps) {
           </Alert>
         ) : null}
 
+        {currentTab === "runs" && workflowRunsError ? (
+          <Alert variant="destructive">
+            <AlertTitle>Workflow runs are unavailable</AlertTitle>
+            <AlertDescription>{workflowRunsError}</AlertDescription>
+          </Alert>
+        ) : null}
+
         {currentTab === "summary" ? (
           <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <Card className="rounded-2xl border-border/70 bg-card/95 shadow-sm">
@@ -633,15 +752,27 @@ export default async function Home({ searchParams }: HomePageProps) {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="font-heading text-3xl font-semibold tracking-tight text-foreground">
-                Delivery Pipeline
+                {currentTab === "runs" ? "Workflow Runs" : "Delivery Pipeline"}
               </h2>
               <p className="text-sm text-muted-foreground">
-                Source of truth from webhook and sync-ingested workflow telemetry.
+                {currentTab === "runs"
+                  ? "Run telemetry with direct drill-down into run and job details."
+                  : "Source of truth from webhook and sync-ingested workflow telemetry."}
               </p>
             </div>
-            <span className="rounded-full border border-border/70 bg-card px-3 py-1 text-xs font-medium text-muted-foreground">
-              Focus: {focusLabels[focusFilter]}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="rounded-full border border-border/70 bg-card px-3 py-1 text-xs font-medium text-muted-foreground">
+                Focus: {focusLabels[focusFilter]}
+              </span>
+              {currentTab === "runs" ? (
+                <Link
+                  href="/runs"
+                  className="rounded-full border border-border/70 bg-card px-3 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+                >
+                  Open Runs Explorer
+                </Link>
+              ) : null}
+            </div>
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -660,76 +791,169 @@ export default async function Home({ searchParams }: HomePageProps) {
             ))}
           </div>
 
-          <Card className="rounded-[28px] border-border/70 bg-card/95 shadow-sm">
-            <CardContent className="p-0">
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[900px] border-separate border-spacing-0 text-sm">
-                  <thead>
-                    <tr className="border-b border-border/70 bg-background/65 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                      <th className="px-4 py-3 font-medium">Repository</th>
-                      <th className="px-4 py-3 font-medium">Branch</th>
-                      <th className="px-4 py-3 font-medium">Duration</th>
-                      <th className="px-4 py-3 font-medium">Status</th>
-                      <th className="px-4 py-3 font-medium">Risk</th>
-                      <th className="px-4 py-3 font-medium">Next Action</th>
-                      <th className="px-4 py-3 font-medium">Last Activity</th>
-                      <th className="px-4 py-3 font-medium">Tribe</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredDeployments.length === 0 ? (
-                      <tr>
-                        <td
-                          colSpan={8}
-                          className="px-4 py-10 text-center text-sm text-muted-foreground"
-                        >
-                          No deployment rows match this filter.
-                        </td>
+          {currentTab === "runs" ? (
+            <Card className="rounded-[28px] border-border/70 bg-card/95 shadow-sm">
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[980px] border-separate border-spacing-0 text-sm">
+                    <thead>
+                      <tr className="border-b border-border/70 bg-background/65 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                        <th className="px-4 py-3 font-medium">Repository</th>
+                        <th className="px-4 py-3 font-medium">Workflow</th>
+                        <th className="px-4 py-3 font-medium">Branch</th>
+                        <th className="px-4 py-3 font-medium">Duration</th>
+                        <th className="px-4 py-3 font-medium">Status</th>
+                        <th className="px-4 py-3 font-medium">Next Action</th>
+                        <th className="px-4 py-3 font-medium">Last Activity</th>
+                        <th className="px-4 py-3 font-medium">Tribe</th>
+                        <th className="px-4 py-3 font-medium">Details</th>
                       </tr>
-                    ) : (
-                      filteredDeployments.slice(0, 20).map((deployment) => {
-                        const risk = getRiskTone(deployment.status);
-
-                        return (
+                    </thead>
+                    <tbody>
+                      {filteredWorkflowRuns.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={9}
+                            className="px-4 py-10 text-center text-sm text-muted-foreground"
+                          >
+                            No workflow runs match this filter.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredWorkflowRuns.slice(0, 25).map((run) => (
                           <tr
-                            key={deployment.id}
+                            key={run.id}
                             className="border-b border-border/60 last:border-b-0 hover:bg-background/50"
                           >
-                            <td className="px-4 py-3.5 font-medium text-foreground">{deployment.repository}</td>
-                            <td className="px-4 py-3.5 text-muted-foreground">{deployment.branch}</td>
+                            <td className="px-4 py-3.5 font-medium text-foreground">{run.repository}</td>
                             <td className="px-4 py-3.5 text-muted-foreground">
-                              {formatRuntime(deployment.duration_seconds)}
+                              <div className="space-y-1">
+                                <p className="font-medium text-foreground">
+                                  {run.workflow_name ?? "Workflow"}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  run #{run.run_id} · attempt {run.run_attempt}
+                                </p>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3.5 text-muted-foreground">{run.branch}</td>
+                            <td className="px-4 py-3.5 text-muted-foreground">
+                              {formatRuntime(run.duration_seconds)}
                             </td>
                             <td className="px-4 py-3.5">
-                              <StatusBadge status={deployment.status} />
-                            </td>
-                            <td className="px-4 py-3.5">
-                              <span
-                                className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${risk.className}`}
-                              >
-                                {risk.label}
-                              </span>
+                              <StatusBadge status={run.status} />
                             </td>
                             <td className="px-4 py-3.5 text-muted-foreground">
-                              {getNextAction(deployment)}
+                              {getRunNextAction(run)}
                             </td>
                             <td className="px-4 py-3.5 text-muted-foreground">
-                              {formatRelativeTime(deployment.created_at)}
+                              {formatRelativeTime(run.completed_at ?? run.created_at)}
                             </td>
                             <td className="px-4 py-3.5">
                               <span className="inline-flex rounded-full border border-border/70 bg-background px-2.5 py-1 text-xs font-medium text-foreground">
-                                {deployment.tribe ?? "unmapped"}
+                                {run.tribe}
                               </span>
                             </td>
+                            <td className="px-4 py-3.5">
+                              <div className="flex items-center gap-2">
+                                <Link
+                                  href={`/runs/${run.id}`}
+                                  className="inline-flex rounded-full border border-border/70 bg-card px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+                                >
+                                  Open
+                                </Link>
+                                {run.run_url ? (
+                                  <a
+                                    href={run.run_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex rounded-full border border-border/70 bg-card px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+                                  >
+                                    GitHub
+                                  </a>
+                                ) : null}
+                              </div>
+                            </td>
                           </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="rounded-[28px] border-border/70 bg-card/95 shadow-sm">
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[900px] border-separate border-spacing-0 text-sm">
+                    <thead>
+                      <tr className="border-b border-border/70 bg-background/65 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                        <th className="px-4 py-3 font-medium">Repository</th>
+                        <th className="px-4 py-3 font-medium">Branch</th>
+                        <th className="px-4 py-3 font-medium">Duration</th>
+                        <th className="px-4 py-3 font-medium">Status</th>
+                        <th className="px-4 py-3 font-medium">Risk</th>
+                        <th className="px-4 py-3 font-medium">Next Action</th>
+                        <th className="px-4 py-3 font-medium">Last Activity</th>
+                        <th className="px-4 py-3 font-medium">Tribe</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredDeployments.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={8}
+                            className="px-4 py-10 text-center text-sm text-muted-foreground"
+                          >
+                            No deployment rows match this filter.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredDeployments.slice(0, 20).map((deployment) => {
+                          const risk = getRiskTone(deployment.status);
+
+                          return (
+                            <tr
+                              key={deployment.id}
+                              className="border-b border-border/60 last:border-b-0 hover:bg-background/50"
+                            >
+                              <td className="px-4 py-3.5 font-medium text-foreground">{deployment.repository}</td>
+                              <td className="px-4 py-3.5 text-muted-foreground">{deployment.branch}</td>
+                              <td className="px-4 py-3.5 text-muted-foreground">
+                                {formatRuntime(deployment.duration_seconds)}
+                              </td>
+                              <td className="px-4 py-3.5">
+                                <StatusBadge status={deployment.status} />
+                              </td>
+                              <td className="px-4 py-3.5">
+                                <span
+                                  className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${risk.className}`}
+                                >
+                                  {risk.label}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3.5 text-muted-foreground">
+                                {getNextAction(deployment)}
+                              </td>
+                              <td className="px-4 py-3.5 text-muted-foreground">
+                                {formatRelativeTime(deployment.created_at)}
+                              </td>
+                              <td className="px-4 py-3.5">
+                                <span className="inline-flex rounded-full border border-border/70 bg-background px-2.5 py-1 text-xs font-medium text-foreground">
+                                  {deployment.tribe ?? "unmapped"}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           <Card className="rounded-2xl border-border/70 bg-card/95 shadow-sm">
             <CardHeader className="pb-2">
@@ -737,10 +961,29 @@ export default async function Home({ searchParams }: HomePageProps) {
               <CardDescription>Immediate actions for run health</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3 text-sm text-muted-foreground">
-              {focusItems.length === 0 ? (
+              {currentTab === "runs" ? (
+                runFocusItems.length === 0 ? (
+                  <p>No workflow runs yet. Trigger workflows to populate this view.</p>
+                ) : (
+                  runFocusItems.map((item) => (
+                    <div key={item.id} className="rounded-xl border border-border/70 bg-background px-3 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="font-medium text-foreground">{item.repository}</p>
+                        <Link
+                          href={`/runs/${item.id}`}
+                          className="text-xs font-medium text-foreground underline-offset-2 hover:underline"
+                        >
+                          Open run
+                        </Link>
+                      </div>
+                      <p className="text-xs">{getRunNextAction(item)}</p>
+                    </div>
+                  ))
+                )
+              ) : deploymentFocusItems.length === 0 ? (
                 <p>No deployment activity yet. Trigger workflows to populate this view.</p>
               ) : (
-                focusItems.map((item) => (
+                deploymentFocusItems.map((item) => (
                   <div key={item.id} className="rounded-xl border border-border/70 bg-background px-3 py-2">
                     <p className="font-medium text-foreground">{item.repository}</p>
                     <p className="text-xs">{getNextAction(item)}</p>

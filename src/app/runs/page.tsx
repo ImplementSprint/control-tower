@@ -1,0 +1,318 @@
+import Link from "next/link";
+import { redirect } from "next/navigation";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { StatusBadge } from "@/components/status-badge";
+import {
+  getAuthenticatedAccessScope,
+  getScopedTribes,
+  type AccessScope,
+} from "@/lib/auth/access";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import type { DeploymentStatus, WorkflowRun } from "@/lib/supabase/types";
+
+type RunsPageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+type StatusFilter = "all" | DeploymentStatus;
+
+export const dynamic = "force-dynamic";
+
+const statusLabel: Record<StatusFilter, string> = {
+  all: "All",
+  queued: "Queued",
+  running: "Running",
+  success: "Success",
+  failed: "Failed",
+  cancelled: "Cancelled",
+};
+
+function getSingleParam(value: string | string[] | undefined) {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+
+  return value;
+}
+
+function normalizeStatusFilter(value: string | undefined): StatusFilter {
+  if (
+    value === "queued" ||
+    value === "running" ||
+    value === "success" ||
+    value === "failed" ||
+    value === "cancelled"
+  ) {
+    return value;
+  }
+
+  return "all";
+}
+
+function buildRunsHref(status: StatusFilter) {
+  if (status === "all") {
+    return "/runs";
+  }
+
+  return `/runs?status=${status}`;
+}
+
+function formatRuntime(seconds: number | null) {
+  if (seconds === null || Number.isNaN(seconds)) {
+    return "-";
+  }
+
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes}m ${remainder}s`;
+}
+
+function formatRelativeTime(value: string | null) {
+  if (!value) {
+    return "just now";
+  }
+
+  const timestamp = new Date(value).getTime();
+
+  if (Number.isNaN(timestamp)) {
+    return "just now";
+  }
+
+  const diffMs = Date.now() - timestamp;
+  const diffMinutes = Math.floor(diffMs / 60000);
+
+  if (diffMinutes < 1) {
+    return "just now";
+  }
+
+  if (diffMinutes < 60) {
+    return `${diffMinutes} min ago`;
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) {
+    return `${diffHours} hour${diffHours === 1 ? "" : "s"} ago`;
+  }
+
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays} day${diffDays === 1 ? "" : "s"} ago`;
+}
+
+async function getRuns(scope: AccessScope, status: StatusFilter) {
+  try {
+    const scopedTribes = getScopedTribes(scope, null);
+
+    if (scopedTribes !== null && scopedTribes.length === 0) {
+      return {
+        runs: [] as WorkflowRun[],
+        error: null,
+      };
+    }
+
+    const supabase = createSupabaseAdminClient();
+    let query = supabase
+      .from("workflow_runs")
+      .select(
+        "id, repository, run_id, run_attempt, workflow_name, branch, environment, tribe, status, github_status, github_conclusion, event_name, action, run_url, commit_sha, started_at, completed_at, duration_seconds, created_at, updated_at",
+      )
+      .order("completed_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .limit(120);
+
+    if (scopedTribes !== null) {
+      query = query.in("tribe", scopedTribes);
+    }
+
+    if (status !== "all") {
+      query = query.eq("status", status);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      return {
+        runs: [] as WorkflowRun[],
+        error: "Unable to load workflow runs.",
+      };
+    }
+
+    return {
+      runs: (data ?? []) as WorkflowRun[],
+      error: null,
+    };
+  } catch (error) {
+    return {
+      runs: [] as WorkflowRun[],
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unexpected error while loading workflow runs.",
+    };
+  }
+}
+
+export default async function RunsPage({ searchParams }: RunsPageProps) {
+  const scope = await getAuthenticatedAccessScope();
+
+  if (!scope) {
+    redirect("/auth/login?next=/runs");
+  }
+
+  const resolvedSearchParams = await searchParams;
+  const statusFilter = normalizeStatusFilter(
+    getSingleParam(resolvedSearchParams.status),
+  );
+
+  const { runs, error } = await getRuns(scope, statusFilter);
+
+  return (
+    <div className="relative min-h-screen overflow-hidden bg-background">
+      <div className="pointer-events-none absolute -left-24 -top-20 h-80 w-80 rounded-full bg-[oklch(0.93_0.045_52_/_0.85)] blur-3xl" />
+      <div className="pointer-events-none absolute -right-20 -top-24 h-96 w-96 rounded-full bg-[oklch(0.93_0.08_124_/_0.75)] blur-3xl" />
+
+      <main className="relative mx-auto w-full max-w-[1180px] space-y-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="font-heading text-3xl font-semibold tracking-tight text-foreground">
+              Runs Explorer
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              Full run history with drill-down into run and job detail pages.
+            </p>
+          </div>
+          <Link
+            href="/?tab=runs"
+            className="inline-flex items-center rounded-full border border-border/70 bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+          >
+            Back to Dashboard
+          </Link>
+        </header>
+
+        <section className="flex flex-wrap gap-2">
+          {(Object.keys(statusLabel) as StatusFilter[]).map((status) => (
+            <Link
+              key={status}
+              href={buildRunsHref(status)}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                statusFilter === status
+                  ? "bg-foreground text-background"
+                  : "border border-border/70 bg-card text-foreground hover:bg-muted"
+              }`}
+            >
+              {statusLabel[status]}
+            </Link>
+          ))}
+        </section>
+
+        {error ? (
+          <Alert variant="destructive">
+            <AlertTitle>Runs explorer is unavailable</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        <Card className="rounded-[28px] border-border/70 bg-card/95 shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Recent Workflow Runs</CardTitle>
+            <CardDescription>
+              Showing {runs.length} rows for status filter: {statusLabel[statusFilter]}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[980px] border-separate border-spacing-0 text-sm">
+                <thead>
+                  <tr className="border-b border-border/70 bg-background/65 text-left text-xs uppercase tracking-wide text-muted-foreground">
+                    <th className="px-4 py-3 font-medium">Repository</th>
+                    <th className="px-4 py-3 font-medium">Workflow</th>
+                    <th className="px-4 py-3 font-medium">Branch</th>
+                    <th className="px-4 py-3 font-medium">Duration</th>
+                    <th className="px-4 py-3 font-medium">Status</th>
+                    <th className="px-4 py-3 font-medium">Last Activity</th>
+                    <th className="px-4 py-3 font-medium">Tribe</th>
+                    <th className="px-4 py-3 font-medium">Details</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {runs.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={8}
+                        className="px-4 py-10 text-center text-sm text-muted-foreground"
+                      >
+                        No workflow runs are available for this filter.
+                      </td>
+                    </tr>
+                  ) : (
+                    runs.map((run) => (
+                      <tr
+                        key={run.id}
+                        className="border-b border-border/60 last:border-b-0 hover:bg-background/50"
+                      >
+                        <td className="px-4 py-3.5 font-medium text-foreground">{run.repository}</td>
+                        <td className="px-4 py-3.5 text-muted-foreground">
+                          <div className="space-y-1">
+                            <p className="font-medium text-foreground">{run.workflow_name ?? "Workflow"}</p>
+                            <p className="text-xs text-muted-foreground">
+                              run #{run.run_id} · attempt {run.run_attempt}
+                            </p>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3.5 text-muted-foreground">{run.branch}</td>
+                        <td className="px-4 py-3.5 text-muted-foreground">
+                          {formatRuntime(run.duration_seconds)}
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <StatusBadge status={run.status} />
+                        </td>
+                        <td className="px-4 py-3.5 text-muted-foreground">
+                          {formatRelativeTime(run.completed_at ?? run.created_at)}
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <span className="inline-flex rounded-full border border-border/70 bg-background px-2.5 py-1 text-xs font-medium text-foreground">
+                            {run.tribe}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <div className="flex items-center gap-2">
+                            <Link
+                              href={`/runs/${run.id}`}
+                              className="inline-flex rounded-full border border-border/70 bg-card px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+                            >
+                              Open
+                            </Link>
+                            {run.run_url ? (
+                              <a
+                                href={run.run_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex rounded-full border border-border/70 bg-card px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+                              >
+                                GitHub
+                              </a>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      </main>
+    </div>
+  );
+}
