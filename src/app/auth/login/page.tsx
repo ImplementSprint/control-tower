@@ -10,12 +10,19 @@ import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 const errorMessages: Record<string, string> = {
   missing_oauth_code: "GitHub sign-in did not return an authorization code.",
   oauth_exchange_failed: "Could not finalize GitHub login. Try again.",
-  github_scope_missing: "GitHub org verification scope is missing. Contact an admin.",
-  org_membership_required: "Access is restricted to ImplementSprint organization members.",
+  github_scope_missing:
+    "GitHub authorization is missing required scope for this policy. If org enforcement is enabled, include read:org in NEXT_PUBLIC_GITHUB_OAUTH_SCOPES.",
+  org_membership_required:
+    "Access is restricted by organization membership policy for this deployment.",
   org_check_failed: "GitHub org verification failed. Please try again.",
   provider_not_enabled:
     "GitHub OAuth is not enabled in Supabase yet. Enable GitHub provider in Supabase Auth -> Providers, configure Client ID/Secret, and ensure your app callback URL is in Supabase redirect allow-list.",
 };
+
+const oauthScopes =
+  process.env.NEXT_PUBLIC_GITHUB_OAUTH_SCOPES?.trim() || "user:email";
+
+const allowedOrgHint = process.env.NEXT_PUBLIC_GITHUB_ALLOWED_ORG?.trim();
 
 function getSafeNextPath(value: string | null) {
   if (!value || !value.startsWith("/") || value.startsWith("//")) {
@@ -62,7 +69,7 @@ function LoginContent() {
         provider: "github",
         options: {
           redirectTo: redirectTo.toString(),
-          scopes: "read:org user:email read:user",
+          scopes: oauthScopes,
           skipBrowserRedirect: true,
         },
       });
@@ -111,7 +118,7 @@ function LoginContent() {
               View-only by default for tribe members.
             </p>
             <p className="rounded-xl border border-border/70 bg-background px-3 py-2">
-              GitHub org membership enforcement on sign-in.
+              Optional GitHub org policy enforcement on sign-in.
             </p>
             <p className="rounded-xl border border-border/70 bg-background px-3 py-2">
               Audited admin overrides for controlled operations.
@@ -128,7 +135,9 @@ function LoginContent() {
               Sign in
             </CardTitle>
             <p className="text-sm text-muted-foreground">
-              Access is limited to ImplementSprint GitHub organization members.
+              {allowedOrgHint
+                ? `Access is limited to ${allowedOrgHint} members and authorized platform users.`
+                : "Access is controlled by platform admins via tribe membership assignments."}
             </p>
           </CardHeader>
           <CardContent className="space-y-4 pb-6">

@@ -17,7 +17,8 @@ Set these in Vercel Project Settings -> Environment Variables:
 - NEXT_PUBLIC_SITE_URL
 - NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 - SUPABASE_SECRET_KEY
-- GITHUB_ALLOWED_ORG (default `ImplementSprint`)
+- NEXT_PUBLIC_GITHUB_OAUTH_SCOPES (default `user:email`)
+- GITHUB_ALLOWED_ORG (optional, comma-separated)
 - GITHUB_WEBHOOK_SECRET
 - TRIBE_REPO_MAP_JSON (optional)
 - INGESTION_TOKEN
@@ -38,7 +39,12 @@ OAuth setup:
 3. Add your app URLs in Supabase Auth redirect allow-list:
 	- `https://<your-project>.vercel.app/auth/callback`
 	- `http://localhost:3000/auth/callback` (for local dev)
-4. Ensure GitHub scope includes `read:org` so org membership can be validated.
+4. Keep OAuth scopes minimal (`user:email`) unless you explicitly enforce org membership.
+5. If `GITHUB_ALLOWED_ORG` is set, include `read:org` in `NEXT_PUBLIC_GITHUB_OAUTH_SCOPES`.
+
+Enterprise recommendation:
+
+- For stricter org governance with better UX, migrate to a GitHub App model and use OAuth only for user identity.
 
 ## 3) Build Settings
 

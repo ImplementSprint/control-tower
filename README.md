@@ -13,7 +13,7 @@ Fullstack Next.js application designed for Vercel deployment, using shadcn/ui fo
 ## Features
 
 - Dashboard metrics for deployments
-- GitHub OAuth login with organization restriction
+- GitHub OAuth login with optional organization restriction
 - Tribe-scoped read visibility (users only see assigned tribes)
 - Admin-only deployment create/update overrides
 - Supabase-backed persistence with typed validation
@@ -40,7 +40,8 @@ cp .env.example .env.local
 - NEXT_PUBLIC_SITE_URL
 - NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 - SUPABASE_SECRET_KEY
-- GITHUB_ALLOWED_ORG (default `ImplementSprint`)
+- NEXT_PUBLIC_GITHUB_OAUTH_SCOPES (default `user:email`)
+- GITHUB_ALLOWED_ORG (optional, comma-separated for org-gated login)
 - GITHUB_WEBHOOK_SECRET (for GitHub webhook signature verification)
 - TRIBE_REPO_MAP_JSON (optional explicit repo-to-tribe mapping)
 - INGESTION_TOKEN (required to protect sync endpoint)
@@ -53,9 +54,16 @@ Compatibility notes:
 
 Auth + access notes:
 1. Sign-in is via GitHub OAuth at `/auth/login`.
-2. Users must be members of `GITHUB_ALLOWED_ORG`.
-3. Tribe access is controlled by `user_tribe_membership` rows.
-4. Deployment create/update APIs are reserved for `platform_admin` users.
+2. OAuth uses `NEXT_PUBLIC_GITHUB_OAUTH_SCOPES` (minimal default: `user:email`).
+3. If `GITHUB_ALLOWED_ORG` is set, users must belong to one of those orgs.
+4. If `GITHUB_ALLOWED_ORG` is empty, org-based gating is disabled.
+5. Tribe access is controlled by `user_tribe_membership` rows.
+6. Deployment create/update APIs are reserved for `platform_admin` users.
+
+Recommended hardening path:
+1. Keep OAuth scopes minimal for identity (`user:email`) unless org policy requires `read:org`.
+2. Prefer tribe/user membership controls for day-to-day authorization.
+3. For enterprise org controls, migrate to a GitHub App model for org-level governance and keep OAuth focused on user identity.
 
 Tribe ownership resolution order:
 1. `TRIBE_REPO_MAP_JSON` explicit mapping.

@@ -27,7 +27,17 @@ async function isAllowedGithubOrgMember(providerToken: string, org: string) {
   );
 
   if (response.status === 404) {
-    return false;
+    return {
+      allowed: false,
+      scopeMissing: false,
+    };
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    return {
+      allowed: false,
+      scopeMissing: true,
+    };
   }
 
   if (!response.ok) {
@@ -35,7 +45,10 @@ async function isAllowedGithubOrgMember(providerToken: string, org: string) {
   }
 
   const payload = (await response.json()) as { state?: string };
-  return payload.state === "active" || payload.state === "pending";
+  return {
+    allowed: payload.state === "active" || payload.state === "pending",
+    scopeMissing: false,
+  };
 }
 
 export async function GET(request: Request) {
@@ -58,8 +71,12 @@ export async function GET(request: Request) {
     return NextResponse.redirect(redirectUrl);
   }
 
-  const requiredOrg = process.env.GITHUB_ALLOWED_ORG ?? "ImplementSprint";
-  if (requiredOrg.trim().length > 0) {
+  const requiredOrgs = (process.env.GITHUB_ALLOWED_ORG ?? "")
+    .split(",")
+    .map((org) => org.trim())
+    .filter((org) => org.length > 0);
+
+  if (requiredOrgs.length > 0) {
     const providerToken = data.session.provider_token;
 
     if (!providerToken) {
@@ -70,12 +87,30 @@ export async function GET(request: Request) {
     }
 
     try {
-      const isAllowed = await isAllowedGithubOrgMember(providerToken, requiredOrg);
+      let isAllowed = false;
+      let scopeMissing = false;
+
+      for (const org of requiredOrgs) {
+        const result = await isAllowedGithubOrgMember(providerToken, org);
+
+        if (result.scopeMissing) {
+          scopeMissing = true;
+          continue;
+        }
+
+        if (result.allowed) {
+          isAllowed = true;
+          break;
+        }
+      }
 
       if (!isAllowed) {
         await supabase.auth.signOut();
         const redirectUrl = new URL("/auth/login", url.origin);
-        redirectUrl.searchParams.set("error", "org_membership_required");
+        redirectUrl.searchParams.set(
+          "error",
+          scopeMissing ? "github_scope_missing" : "org_membership_required",
+        );
         return NextResponse.redirect(redirectUrl);
       }
     } catch {
