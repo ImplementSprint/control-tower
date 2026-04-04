@@ -87,9 +87,12 @@ export function NewDeploymentForm() {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Create Deployment</CardTitle>
+    <Card className="border-white/70 bg-white/75 shadow-[0_18px_70px_-40px_oklch(0.45_0.1_252)] backdrop-blur">
+      <CardHeader className="space-y-1">
+        <CardTitle className="font-heading text-2xl">Create Deployment Record</CardTitle>
+        <p className="text-sm text-muted-foreground">
+          Log a deployment manually when replaying incidents or validating pipeline transitions.
+        </p>
       </CardHeader>
       <CardContent>
         <form className="grid gap-4 md:grid-cols-2" onSubmit={handleSubmit}>
@@ -98,6 +101,7 @@ export function NewDeploymentForm() {
             <Input
               id="repository"
               placeholder="central-workflow"
+              className="bg-white/80"
               required
               value={form.repository}
               onChange={(event) =>
@@ -111,6 +115,7 @@ export function NewDeploymentForm() {
             <Input
               id="branch"
               placeholder="test"
+              className="bg-white/80"
               required
               value={form.branch}
               onChange={(event) =>
@@ -134,7 +139,7 @@ export function NewDeploymentForm() {
                 }));
               }}
             >
-              <SelectTrigger>
+              <SelectTrigger className="bg-white/80">
                 <SelectValue placeholder="Select environment" />
               </SelectTrigger>
               <SelectContent>
@@ -160,7 +165,7 @@ export function NewDeploymentForm() {
                 }));
               }}
             >
-              <SelectTrigger>
+              <SelectTrigger className="bg-white/80">
                 <SelectValue placeholder="Select status" />
               </SelectTrigger>
               <SelectContent>
@@ -180,6 +185,7 @@ export function NewDeploymentForm() {
               type="number"
               min={0}
               placeholder="245"
+              className="bg-white/80"
               value={form.durationSeconds}
               onChange={(event) =>
                 setForm((current) => ({ ...current, durationSeconds: event.target.value }))
@@ -192,6 +198,7 @@ export function NewDeploymentForm() {
             <Input
               id="commit"
               placeholder="8df88ad"
+              className="bg-white/80 font-mono"
               value={form.commitSha}
               onChange={(event) =>
                 setForm((current) => ({ ...current, commitSha: event.target.value }))
@@ -204,6 +211,7 @@ export function NewDeploymentForm() {
             <Textarea
               id="summary"
               placeholder="Maestro Android lane passed and promotion PR prepared."
+              className="min-h-24 bg-white/80"
               value={form.summary}
               onChange={(event) =>
                 setForm((current) => ({ ...current, summary: event.target.value }))

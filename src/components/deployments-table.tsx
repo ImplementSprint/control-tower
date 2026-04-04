@@ -31,17 +31,17 @@ function formatDate(value: string) {
 export function DeploymentsTable({ deployments }: { deployments: Deployment[] }) {
   if (deployments.length === 0) {
     return (
-      <p className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
+      <p className="rounded-2xl border border-dashed border-border/70 bg-white/70 p-6 text-sm text-muted-foreground">
         No deployment rows yet. Create one using the form above.
       </p>
     );
   }
 
   return (
-    <div className="overflow-x-auto rounded-xl border">
+    <div className="overflow-x-auto rounded-2xl border border-border/70 bg-white/70">
       <Table>
         <TableHeader>
-          <TableRow>
+          <TableRow className="bg-white/80">
             <TableHead>Repository</TableHead>
             <TableHead>Branch</TableHead>
             <TableHead>Environment</TableHead>
@@ -53,10 +53,12 @@ export function DeploymentsTable({ deployments }: { deployments: Deployment[] })
         </TableHeader>
         <TableBody>
           {deployments.map((deployment) => (
-            <TableRow key={deployment.id}>
+            <TableRow key={deployment.id} className="hover:bg-white/80">
               <TableCell className="font-medium">{deployment.repository}</TableCell>
               <TableCell>{deployment.branch}</TableCell>
-              <TableCell className="uppercase">{deployment.environment}</TableCell>
+              <TableCell className="uppercase tracking-wide text-xs text-muted-foreground">
+                {deployment.environment}
+              </TableCell>
               <TableCell>
                 <StatusBadge status={deployment.status} />
               </TableCell>
