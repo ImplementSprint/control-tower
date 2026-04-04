@@ -35,19 +35,19 @@ const enforceOrgPolicy =
 const allowedOrgHint = enforceOrgPolicy ? configuredAllowedOrgHint : "";
 
 const floatingLeftNotes = [
-  { text: "Review failed runs", top: "8%", rotate: -10 },
-  { text: "Verify release gates", top: "25%", rotate: -7 },
-  { text: "Check policy alerts", top: "42%", rotate: -11 },
-  { text: "Track uat stability", top: "60%", rotate: -8 },
-  { text: "Confirm promotion", top: "77%", rotate: -12 },
+  { text: "Review failed runs", time: "18:00", top: "8%", rotate: -10 },
+  { text: "Verify release gates", time: "14:30", top: "25%", rotate: -7 },
+  { text: "Check policy alerts", time: "10:00", top: "42%", rotate: -11 },
+  { text: "Track uat stability", time: "16:00", top: "60%", rotate: -8 },
+  { text: "Confirm promotion", time: "20:00", top: "77%", rotate: -12 },
 ];
 
 const floatingRightNotes = [
-  { text: "Ship mobile build", top: "12%", rotate: 9 },
-  { text: "Sync with cicd tribe", top: "30%", rotate: 7 },
-  { text: "Audit workflow jobs", top: "48%", rotate: 10 },
-  { text: "Monitor test branch", top: "66%", rotate: 8 },
-  { text: "Close release brief", top: "83%", rotate: 11 },
+  { text: "Ship mobile build", time: "20:00", top: "12%", rotate: 9 },
+  { text: "Sync with cicd tribe", time: "11:00", top: "30%", rotate: 7 },
+  { text: "Audit workflow jobs", time: "22:00", top: "48%", rotate: 10 },
+  { text: "Monitor test branch", time: "18:00", top: "66%", rotate: 8 },
+  { text: "Close release brief", time: "08:00", top: "83%", rotate: 11 },
 ];
 
 function normalizeScopeString(value: string) {
@@ -189,10 +189,12 @@ function LoginContent() {
         {floatingLeftNotes.map((note) => (
           <div
             key={note.text}
-            className="absolute left-[-3.2rem] rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-medium text-slate-500 shadow-sm"
+            className="absolute left-[-3.2rem] flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-medium text-slate-500 shadow-sm"
             style={{ top: note.top, transform: `rotate(${note.rotate}deg)` }}
           >
-            {note.text}
+            <span className="inline-flex size-3 rounded-full border border-slate-300" />
+            <span>{note.text}</span>
+            <span className="text-[10px] text-slate-400">{note.time}</span>
           </div>
         ))}
       </div>
@@ -201,27 +203,27 @@ function LoginContent() {
         {floatingRightNotes.map((note) => (
           <div
             key={note.text}
-            className="absolute right-[-3.2rem] rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-medium text-slate-500 shadow-sm"
+            className="absolute right-[-3.2rem] flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-medium text-slate-500 shadow-sm"
             style={{ top: note.top, transform: `rotate(${note.rotate}deg)` }}
           >
-            {note.text}
+            <span className="inline-flex size-3 rounded-full border border-slate-300" />
+            <span>{note.text}</span>
+            <span className="text-[10px] text-slate-400">{note.time}</span>
           </div>
         ))}
       </div>
 
       <div className="relative mx-auto flex min-h-[calc(100vh-5rem)] w-full max-w-3xl items-center justify-center">
-        <section className="w-full max-w-md text-center">
-          <div className="mx-auto inline-grid size-10 grid-cols-2 gap-1.5">
+        <section className="w-full max-w-[620px] text-center">
+          <div className="mx-auto inline-grid size-9 grid-cols-2 gap-1.5">
             <span className="rounded-md bg-zinc-900" />
             <span className="rounded-md bg-zinc-900" />
             <span className="rounded-md bg-zinc-900" />
             <span className="rounded-md bg-zinc-900" />
           </div>
 
-          <h1 className="mt-7 text-balance font-heading text-4xl font-semibold leading-tight text-slate-600 sm:text-5xl">
-            Joyful and productive
-            <br />
-            collaboration.
+          <h1 className="mx-auto mt-7 max-w-[560px] text-balance font-heading text-[clamp(2.2rem,5vw,3.7rem)] font-semibold leading-[1.08] tracking-[-0.02em] text-slate-600">
+            Joyful and productive collaboration.
             <span className="text-slate-900"> All in one.</span>
           </h1>
 
@@ -245,8 +247,8 @@ function LoginContent() {
             disabled={isLoading}
             onClick={handleGitHubLogin}
           >
-            <span className="inline-flex size-4 items-center justify-center rounded-full border border-white/40 text-[10px] font-semibold leading-none">
-              G
+            <span className="inline-flex size-4 items-center justify-center rounded-full border border-white/40 text-[8px] font-bold leading-none tracking-tight">
+              GH
             </span>
             {isLoading ? "Redirecting to GitHub..." : "Continue with GitHub"}
           </Button>
@@ -256,15 +258,9 @@ function LoginContent() {
             security requirements.
           </p>
 
-          <p className="mx-auto mt-2 max-w-sm text-center text-[11px] text-slate-500">
-            {allowedOrgHint
-              ? `Restricted to ${allowedOrgHint} organization members with authorized platform access.`
-              : "Access is managed by platform admins through tribe membership."}
-          </p>
-
-          {enforceOrgPolicy ? (
-            <p className="mx-auto mt-2 max-w-sm text-center text-[11px] text-amber-700">
-              Org policy is enabled and this login requests read:org for membership verification.
+          {enforceOrgPolicy && allowedOrgHint ? (
+            <p className="mx-auto mt-2 max-w-sm text-center text-[11px] text-slate-500">
+              Restricted to {allowedOrgHint} organization members.
             </p>
           ) : null}
         </section>
