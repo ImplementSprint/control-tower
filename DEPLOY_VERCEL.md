@@ -16,6 +16,11 @@ Set these in Vercel Project Settings -> Environment Variables:
 - NEXT_PUBLIC_SUPABASE_URL
 - NEXT_PUBLIC_SUPABASE_ANON_KEY
 - SUPABASE_SERVICE_ROLE_KEY
+- GITHUB_WEBHOOK_SECRET
+- TRIBE_REPO_MAP_JSON (optional)
+- INGESTION_TOKEN
+- GITHUB_TOKEN (or GH_TOKEN)
+- GITHUB_REPOS_JSON or GITHUB_REPOS_CSV (optional)
 
 Notes:
 
@@ -32,6 +37,9 @@ Notes:
 
 Before first production use, run SQL from supabase/schema.sql in Supabase SQL editor.
 
+If your deployment was already initialized earlier, run schema.sql again to apply telemetry tables (`workflow_runs`, `github_webhook_events`, `repo_tribe_map`).
+Latest schema also includes `workflow_jobs`, `policy_rules`, and `audit_events` for governance and gate-level telemetry.
+
 ## 5) Verify Deployment
 
 After deploy:
@@ -41,3 +49,41 @@ After deploy:
 3. Confirm record appears in Recent Deployments.
 
 If data does not load, verify Supabase environment variables and schema setup.
+
+## 6) GitHub Webhook
+
+Set repository webhook in GitHub:
+
+- Payload URL: https://<your-project>.vercel.app/api/webhooks/github/workflow-run
+- Content type: application/json
+- Secret: same value as GITHUB_WEBHOOK_SECRET
+- SSL: Enable verification
+- Event: Workflow runs
+
+After setup, trigger a workflow run and confirm new entries appear in the dashboard.
+
+You can also verify normalized ingestion via:
+
+- GET https://<your-project>.vercel.app/api/workflow-runs
+- GET https://<your-project>.vercel.app/api/workflow-jobs
+- GET https://<your-project>.vercel.app/api/metrics/tribes
+- GET https://<your-project>.vercel.app/api/audit-events
+
+## 7) Backfill Sync (Missed Webhooks)
+
+POST endpoint:
+
+- https://<your-project>.vercel.app/api/ingestion/github/workflow-runs/sync
+
+Required header:
+
+- x-ingestion-token: <INGESTION_TOKEN>
+
+Optional JSON body:
+
+```json
+{
+	"repos": ["ImplementSprint/central-workflow"],
+	"perRepoLimit": 25
+}
+```

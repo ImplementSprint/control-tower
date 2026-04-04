@@ -3,6 +3,11 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { updateDeploymentSchema } from "@/lib/supabase/types";
+import {
+  createAuditEvent,
+  evaluateDeploymentMutationPolicies,
+  resolveTribeForRepository,
+} from "@/lib/control-tower/governance";
 
 const requestSchema = updateDeploymentSchema.extend({
   durationSeconds: z.preprocess((value) => {
@@ -66,6 +71,23 @@ export async function PATCH(
 
     const updates: Record<string, string | number | null> = {};
 
+    const supabase = createSupabaseAdminClient();
+    const { data: existingDeployment, error: existingError } = await supabase
+      .from("deployments")
+      .select("id, repository, branch, environment, status, summary")
+      .eq("id", id)
+      .single();
+
+    if (existingError || !existingDeployment) {
+      return NextResponse.json(
+        {
+          error: "Unable to find deployment to update.",
+          details: existingError?.message ?? "Missing deployment",
+        },
+        { status: 404 },
+      );
+    }
+
     if (parsed.data.status) {
       updates.status = parsed.data.status;
     }
@@ -78,7 +100,31 @@ export async function PATCH(
       updates.duration_seconds = parsed.data.durationSeconds;
     }
 
-    const supabase = createSupabaseAdminClient();
+    const tribe = await resolveTribeForRepository(supabase, existingDeployment.repository);
+    const nextStatus = (updates.status as string | undefined) ?? existingDeployment.status;
+    const nextSummary =
+      updates.summary !== undefined
+        ? (updates.summary as string | null)
+        : (existingDeployment.summary as string | null);
+
+    const violations = await evaluateDeploymentMutationPolicies(supabase, {
+      repository: existingDeployment.repository,
+      tribe,
+      environment: existingDeployment.environment,
+      status: nextStatus as typeof existingDeployment.status,
+      summary: nextSummary,
+    });
+
+    if (violations.length > 0) {
+      return NextResponse.json(
+        {
+          error: "Deployment update blocked by policy rules.",
+          violations,
+        },
+        { status: 409 },
+      );
+    }
+
     const { data, error } = await supabase
       .from("deployments")
       .update(updates)
@@ -94,6 +140,28 @@ export async function PATCH(
         },
         { status: 500 },
       );
+    }
+
+    try {
+      await createAuditEvent(supabase, {
+        eventType: "deployment.updated",
+        source: "api",
+        actor: request.headers.get("x-actor") ?? "anonymous",
+        actorType: "user",
+        repository: data.repository,
+        tribe,
+        branch: data.branch,
+        environment: data.environment,
+        deploymentId: data.id,
+        details: {
+          previous_status: existingDeployment.status,
+          next_status: data.status,
+          previous_summary: existingDeployment.summary,
+          next_summary: data.summary,
+        },
+      });
+    } catch {
+      // Do not fail successful mutation when audit logging has transient issues.
     }
 
     revalidatePath("/");

@@ -16,6 +16,8 @@ Fullstack Next.js application designed for Vercel deployment, using shadcn/ui fo
 - Create deployment records via API route
 - Update deployment status via API route
 - Supabase-backed persistence with typed validation
+- Normalized workflow run and job ingestion from GitHub Actions
+- Policy rules + immutable audit event APIs
 
 ## Local Setup
 
@@ -36,10 +38,23 @@ cp .env.example .env.local
 - NEXT_PUBLIC_SUPABASE_URL
 - NEXT_PUBLIC_SUPABASE_ANON_KEY
 - SUPABASE_SERVICE_ROLE_KEY
+- GITHUB_WEBHOOK_SECRET (for GitHub webhook signature verification)
+- TRIBE_REPO_MAP_JSON (optional explicit repo-to-tribe mapping)
+- INGESTION_TOKEN (required to protect sync endpoint)
+- GITHUB_TOKEN (or GH_TOKEN) for GitHub Actions API backfill
+- GITHUB_REPOS_JSON or GITHUB_REPOS_CSV (optional default repo list)
+
+Tribe ownership resolution order:
+1. `TRIBE_REPO_MAP_JSON` explicit mapping.
+2. `repo_tribe_map` table rows where `is_active = true`.
+3. Naming convention fallback from repository name: `tribename-fe`, `tribename-be`, or `tribename-mobile` maps to tribe `tribename`.
+4. When fallback returns a concrete tribe, Control Tower upserts that mapping into `repo_tribe_map` (for both full `org/repo` and short repo key) so next requests resolve from the table.
 
 4. Create the database table in Supabase SQL editor using:
 
 - supabase/schema.sql
+
+If you already ran schema.sql before, run it again to apply new telemetry tables used by webhook ingestion.
 
 5. Start development server:
 
@@ -54,6 +69,40 @@ Open http://localhost:3000.
 - GET /api/deployments
 - POST /api/deployments
 - PATCH /api/deployments/:id
+- GET /api/workflow-runs
+- GET /api/workflow-jobs
+- GET /api/metrics/tribes
+- GET /api/policies
+- POST /api/policies
+- GET /api/audit-events
+- POST /api/webhooks/github/workflow-run
+- POST /api/ingestion/github/workflow-runs/sync
+
+## GitHub Webhook Setup
+
+1. In your GitHub repository, add a webhook with payload URL:
+
+- https://YOUR-VERCEL-DOMAIN.vercel.app/api/webhooks/github/workflow-run
+
+2. Set content type to application/json.
+3. Use the same secret value as GITHUB_WEBHOOK_SECRET.
+4. Enable SSL verification.
+5. Select individual event: Workflow runs.
+
+## Backfill Sync Endpoint
+
+Use this endpoint to reconcile missed webhook deliveries.
+
+The sync route now ingests both workflow runs and workflow jobs (gate-level records).
+
+Example request:
+
+```bash
+curl -X POST "https://YOUR-VERCEL-DOMAIN.vercel.app/api/ingestion/github/workflow-runs/sync" \
+	-H "Content-Type: application/json" \
+	-H "x-ingestion-token: YOUR_INGESTION_TOKEN" \
+	-d '{"repos":["ImplementSprint/central-workflow"],"perRepoLimit":25}'
+```
 
 ## Vercel Deployment
 

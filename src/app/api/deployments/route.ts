@@ -3,6 +3,11 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createDeploymentSchema } from "@/lib/supabase/types";
+import {
+  createAuditEvent,
+  evaluateDeploymentMutationPolicies,
+  resolveTribeForRepository,
+} from "@/lib/control-tower/governance";
 
 const requestSchema = createDeploymentSchema.extend({
   durationSeconds: z.preprocess((value) => {
@@ -92,6 +97,24 @@ export async function POST(request: Request) {
     }
 
     const supabase = createSupabaseAdminClient();
+    const tribe = await resolveTribeForRepository(supabase, parsed.data.repository);
+    const violations = await evaluateDeploymentMutationPolicies(supabase, {
+      repository: parsed.data.repository,
+      tribe,
+      environment: parsed.data.environment,
+      status: parsed.data.status,
+      summary: parsed.data.summary ?? null,
+    });
+
+    if (violations.length > 0) {
+      return NextResponse.json(
+        {
+          error: "Deployment blocked by policy rules.",
+          violations,
+        },
+        { status: 409 },
+      );
+    }
 
     const { data, error } = await supabase
       .from("deployments")
@@ -116,6 +139,25 @@ export async function POST(request: Request) {
         },
         { status: 500 },
       );
+    }
+
+    try {
+      await createAuditEvent(supabase, {
+        eventType: "deployment.created",
+        source: "api",
+        actor: request.headers.get("x-actor") ?? "anonymous",
+        actorType: "user",
+        repository: data.repository,
+        tribe,
+        branch: data.branch,
+        environment: data.environment,
+        deploymentId: data.id,
+        details: {
+          status: data.status,
+        },
+      });
+    } catch {
+      // Do not fail successful mutation when audit logging has transient issues.
     }
 
     revalidatePath("/");
