@@ -24,6 +24,29 @@ const oauthScopes =
 
 const allowedOrgHint = process.env.NEXT_PUBLIC_GITHUB_ALLOWED_ORG?.trim();
 
+function normalizeScopeString(value: string) {
+  return Array.from(
+    new Set(
+      value
+        .split(/\s+/)
+        .map((scope) => scope.trim())
+        .filter((scope) => scope.length > 0),
+    ),
+  ).join(" ");
+}
+
+function ensureOrgScope(value: string) {
+  const scopes = normalizeScopeString(value)
+    .split(" ")
+    .filter((scope) => scope.length > 0);
+
+  if (!scopes.includes("read:org")) {
+    scopes.push("read:org");
+  }
+
+  return scopes.join(" ");
+}
+
 function getSafeNextPath(value: string | null) {
   if (!value || !value.startsWith("/") || value.startsWith("//")) {
     return "/";
@@ -64,13 +87,17 @@ function LoginContent() {
       const redirectTo = new URL("/auth/callback", window.location.origin);
       redirectTo.searchParams.set("next", nextPath);
 
+      const requestedScopes =
+        incomingError === "github_scope_missing"
+          ? ensureOrgScope(oauthScopes)
+          : normalizeScopeString(oauthScopes);
+
       const supabase = getSupabaseBrowserClient();
-      const { data, error: signInError } = await supabase.auth.signInWithOAuth({
+      const { error: signInError } = await supabase.auth.signInWithOAuth({
         provider: "github",
         options: {
           redirectTo: redirectTo.toString(),
-          scopes: oauthScopes,
-          skipBrowserRedirect: true,
+          scopes: requestedScopes,
         },
       });
 
@@ -79,14 +106,6 @@ function LoginContent() {
         setIsLoading(false);
         return;
       }
-
-      if (!data?.url) {
-        setError("Could not start GitHub authentication. Please try again.");
-        setIsLoading(false);
-        return;
-      }
-
-      window.location.assign(data.url);
     } catch (requestError) {
       setError(
         requestError instanceof Error
@@ -165,6 +184,12 @@ function LoginContent() {
             <p className="text-center text-xs text-muted-foreground">
               Need access? Ask a platform admin to assign your tribe membership.
             </p>
+
+            {incomingError === "github_scope_missing" ? (
+              <p className="text-center text-xs text-amber-700">
+                Next sign-in attempt will automatically request read:org for org policy validation.
+              </p>
+            ) : null}
           </CardContent>
         </Card>
       </div>
