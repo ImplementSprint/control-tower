@@ -128,66 +128,9 @@
 
   body {
     @apply bg-background text-foreground;
-    background-image:
-      radial-gradient(circle at 8% -8%, oklch(0.86 0.12 256 / 0.35), transparent 45%),
-      radial-gradient(circle at 92% 4%, oklch(0.86 0.12 193 / 0.28), transparent 40%),
-      linear-gradient(180deg, oklch(0.992 0.005 252) 0%, oklch(0.967 0.008 246) 100%);
-    background-attachment: fixed;
   }
 
   ::selection {
     background: oklch(0.74 0.11 248 / 0.35);
-  }
-}
-
-@keyframes fade-up {
-  from {
-    opacity: 0;
-    transform: translateY(16px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes float-slow {
-  0%,
-  100% {
-    transform: translateY(0px);
-  }
-
-  50% {
-    transform: translateY(-12px);
-  }
-}
-
-@layer utilities {
-  .animate-fade-up {
-    animation: fade-up 700ms ease both;
-  }
-
-  .animate-float-slow {
-    animation: float-slow 11s ease-in-out infinite;
-  }
-
-  .panel-sheen {
-    position: relative;
-    overflow: hidden;
-  }
-
-  .panel-sheen::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-      110deg,
-      transparent 20%,
-      oklch(1 0 0 / 0.55),
-      transparent 80%
-    );
-    opacity: 0.35;
-    pointer-events: none;
   }
 }
