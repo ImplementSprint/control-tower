@@ -215,17 +215,17 @@ export async function GET(request: Request) {
         .eq("is_active", true)
         .limit(1);
 
+      console.log("[auth/callback] tribe memberships query", {
+        count: memberships?.length ?? 0,
+        error: membershipError?.message,
+      });
+
       if (membershipError) {
         const deniedUrl = new URL("/auth/denied", url.origin);
         deniedUrl.searchParams.set("reason", "membership_table_unavailable");
         deniedUrl.searchParams.set("next", nextPath);
         return redirectWithSessionCookies(sessionResponse, deniedUrl);
       }
-
-      console.log("[auth/callback] tribe memberships query", {
-        count: memberships?.length ?? 0,
-        error: membershipError?.message,
-      });
 
       if (!memberships || memberships.length === 0) {
         const metadataRole =
