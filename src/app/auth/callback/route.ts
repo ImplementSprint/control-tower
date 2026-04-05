@@ -8,6 +8,272 @@ type SupabaseRouteContext = {
   sessionResponse: NextResponse;
 };
 
+type MembershipRole = "viewer" | "lead" | "platform_admin";
+
+type MembershipAssignment = {
+  tribe: string;
+  role: MembershipRole;
+};
+
+type AuthenticatedUserLike = {
+  email?: string | null;
+  app_metadata?: unknown;
+  user_metadata?: unknown;
+  identities?: Array<{
+    provider?: string | null;
+    identity_data?: unknown;
+  }> | null;
+};
+
+type GithubTeam = {
+  slug?: string | null;
+  organization?: {
+    login?: string | null;
+  } | null;
+};
+
+const MEMBERSHIP_ROLE_PRIORITY: Record<MembershipRole, number> = {
+  viewer: 1,
+  lead: 2,
+  platform_admin: 3,
+};
+
+function normalizeText(value: unknown) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value.trim().toLowerCase();
+}
+
+function normalizeMembershipRole(value: unknown): MembershipRole {
+  const normalized = normalizeText(value);
+
+  if (normalized === "platform_admin" || normalized === "lead") {
+    return normalized;
+  }
+
+  return "viewer";
+}
+
+function normalizeTribe(value: unknown) {
+  const normalized = normalizeText(value);
+
+  if (!normalized || normalized === "*") {
+    return "";
+  }
+
+  return normalized;
+}
+
+function addAssignment(
+  assignments: Map<string, MembershipAssignment>,
+  next: MembershipAssignment,
+) {
+  const current = assignments.get(next.tribe);
+
+  if (
+    !current ||
+    MEMBERSHIP_ROLE_PRIORITY[next.role] > MEMBERSHIP_ROLE_PRIORITY[current.role]
+  ) {
+    assignments.set(next.tribe, next);
+  }
+}
+
+function parseMembershipMap(rawValue: string | undefined) {
+  if (!rawValue || rawValue.trim().length === 0) {
+    return {} as Record<string, MembershipAssignment>;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as Record<string, unknown>;
+    const normalizedMap: Record<string, MembershipAssignment> = {};
+
+    for (const [rawKey, rawConfig] of Object.entries(parsed ?? {})) {
+      const key = normalizeText(rawKey);
+
+      if (!key) {
+        continue;
+      }
+
+      if (typeof rawConfig === "string") {
+        const tribe = normalizeTribe(rawConfig);
+
+        if (!tribe) {
+          continue;
+        }
+
+        normalizedMap[key] = {
+          tribe,
+          role: "viewer",
+        };
+        continue;
+      }
+
+      if (!rawConfig || typeof rawConfig !== "object") {
+        continue;
+      }
+
+      const config = rawConfig as Record<string, unknown>;
+      const tribe = normalizeTribe(config.tribe);
+
+      if (!tribe) {
+        continue;
+      }
+
+      normalizedMap[key] = {
+        tribe,
+        role: normalizeMembershipRole(config.role),
+      };
+    }
+
+    return normalizedMap;
+  } catch {
+    return {} as Record<string, MembershipAssignment>;
+  }
+}
+
+function resolveGithubUsername(user: AuthenticatedUserLike) {
+  const metadata =
+    user.user_metadata && typeof user.user_metadata === "object"
+      ? (user.user_metadata as Record<string, unknown>)
+      : undefined;
+
+  const githubIdentity = user.identities?.find(
+    (identity) => identity?.provider === "github",
+  );
+  const identityData =
+    githubIdentity?.identity_data && typeof githubIdentity.identity_data === "object"
+      ? (githubIdentity.identity_data as Record<string, unknown>)
+      : undefined;
+
+  return (
+    normalizeText(metadata?.user_name) ||
+    normalizeText(metadata?.preferred_username) ||
+    normalizeText(identityData?.user_name) ||
+    ""
+  );
+}
+
+async function fetchGithubUserTeams(providerToken: string) {
+  const response = await fetch("https://api.github.com/user/teams?per_page=100", {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${providerToken}`,
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    cache: "no-store",
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    return {
+      teams: [] as GithubTeam[],
+      scopeMissing: true,
+    };
+  }
+
+  if (!response.ok) {
+    throw new Error(`GitHub team membership check failed with ${response.status}`);
+  }
+
+  const payload = (await response.json()) as GithubTeam[];
+
+  return {
+    teams: Array.isArray(payload) ? payload : [],
+    scopeMissing: false,
+  };
+}
+
+async function resolveAutomaticMembershipAssignments({
+  user,
+  providerToken,
+}: {
+  user: AuthenticatedUserLike;
+  providerToken: string | null;
+}) {
+  const assignments = new Map<string, MembershipAssignment>();
+
+  const metadata =
+    user.user_metadata && typeof user.user_metadata === "object"
+      ? (user.user_metadata as Record<string, unknown>)
+      : undefined;
+  const appMetadata =
+    user.app_metadata && typeof user.app_metadata === "object"
+      ? (user.app_metadata as Record<string, unknown>)
+      : undefined;
+
+  const metadataTribe = normalizeTribe(metadata?.tribe);
+  if (metadataTribe) {
+    addAssignment(assignments, {
+      tribe: metadataTribe,
+      role: normalizeMembershipRole(appMetadata?.role ?? metadata?.role),
+    });
+  }
+
+  const userMap = parseMembershipMap(process.env.GITHUB_USER_TRIBE_ROLE_MAP_JSON);
+  const identityCandidates = [
+    resolveGithubUsername(user),
+    normalizeText(user.email),
+  ].filter((value) => value.length > 0);
+
+  for (const candidate of identityCandidates) {
+    const mapped = userMap[candidate];
+
+    if (!mapped) {
+      continue;
+    }
+
+    addAssignment(assignments, mapped);
+    break;
+  }
+
+  const teamMap = parseMembershipMap(process.env.GITHUB_TEAM_TRIBE_ROLE_MAP_JSON);
+  const hasTeamMapping = Object.keys(teamMap).length > 0;
+
+  if (!hasTeamMapping) {
+    return {
+      assignments: Array.from(assignments.values()),
+      scopeMissing: false,
+    };
+  }
+
+  if (!providerToken) {
+    return {
+      assignments: Array.from(assignments.values()),
+      scopeMissing: true,
+    };
+  }
+
+  const { teams, scopeMissing } = await fetchGithubUserTeams(providerToken);
+
+  if (scopeMissing) {
+    return {
+      assignments: Array.from(assignments.values()),
+      scopeMissing: true,
+    };
+  }
+
+  for (const team of teams) {
+    const slug = normalizeText(team.slug);
+    const org = normalizeText(team.organization?.login);
+    const fullKey = org && slug ? `${org}/${slug}` : "";
+
+    const mapped =
+      (fullKey ? teamMap[fullKey] : undefined) || (slug ? teamMap[slug] : undefined);
+
+    if (!mapped) {
+      continue;
+    }
+
+    addAssignment(assignments, mapped);
+  }
+
+  return {
+    assignments: Array.from(assignments.values()),
+    scopeMissing: false,
+  };
+}
+
 function resolveSafeNextPath(rawNext: string | null) {
   if (!rawNext) {
     return "/";
@@ -216,6 +482,42 @@ export async function GET(request: Request) {
   if (authenticatedUserId) {
     try {
       const adminClient = createSupabaseAdminClient();
+      const { assignments: autoAssignments, scopeMissing: autoSyncScopeMissing } =
+        await resolveAutomaticMembershipAssignments({
+          user: (data.user ?? {
+            email: data.session.user?.email ?? null,
+          }) as AuthenticatedUserLike,
+          providerToken: data.session.provider_token ?? null,
+        });
+
+      if (autoSyncScopeMissing) {
+        await supabase.auth.signOut();
+        const redirectUrl = new URL("/auth/login", url.origin);
+        redirectUrl.searchParams.set("error", "github_scope_missing");
+        return redirectWithSessionCookies(sessionResponse, redirectUrl);
+      }
+
+      if (autoAssignments.length > 0) {
+        const { error: upsertError } = await adminClient
+          .from("user_tribe_membership")
+          .upsert(
+            autoAssignments.map((item) => ({
+              user_id: authenticatedUserId,
+              tribe: item.tribe,
+              role: item.role,
+              is_active: true,
+            })),
+            { onConflict: "user_id,tribe" },
+          );
+
+        if (upsertError) {
+          const deniedUrl = new URL("/auth/denied", url.origin);
+          deniedUrl.searchParams.set("reason", "membership_check_failed");
+          deniedUrl.searchParams.set("next", nextPath);
+          return redirectWithSessionCookies(sessionResponse, deniedUrl);
+        }
+      }
+
       const { data: memberships, error: membershipError } = await adminClient
         .from("user_tribe_membership")
         .select("id")

@@ -21,6 +21,8 @@ Set these in Vercel Project Settings -> Environment Variables:
 - NEXT_PUBLIC_GITHUB_OAUTH_SCOPES (default `user:email`)
 - NEXT_PUBLIC_GITHUB_REQUIRE_ORG_MEMBERSHIP (default `false`)
 - GITHUB_ALLOWED_ORG (optional, comma-separated; required only when org gate is enabled)
+- GITHUB_USER_TRIBE_ROLE_MAP_JSON (optional username/email -> tribe/role auto-sync)
+- GITHUB_TEAM_TRIBE_ROLE_MAP_JSON (optional team -> tribe/role auto-sync)
 - GITHUB_WEBHOOK_SECRET
 - TRIBE_REPO_MAP_JSON (optional)
 - INGESTION_TOKEN
@@ -41,9 +43,9 @@ OAuth setup:
 3. Add your app URLs in Supabase Auth redirect allow-list:
 	- `https://<your-project>.vercel.app/auth/callback`
 	- `http://localhost:3000/auth/callback` (for local dev)
-4. Keep OAuth scopes minimal (`user:email`) unless you explicitly enforce org membership.
+4. Keep OAuth scopes minimal (`user:email`) unless you explicitly enforce org membership or team-based role sync.
 5. To enforce org membership, define `GITHUB_ALLOWED_ORG` (or set `GITHUB_REQUIRE_ORG_MEMBERSHIP=true`).
-6. If org enforcement is enabled, include `read:org` in `NEXT_PUBLIC_GITHUB_OAUTH_SCOPES`.
+6. If org enforcement or team-based auto-sync is enabled, include `read:org` in `NEXT_PUBLIC_GITHUB_OAUTH_SCOPES`.
 
 Enterprise recommendation:
 
@@ -63,7 +65,7 @@ If your deployment was already initialized earlier, run schema.sql again to appl
 Latest schema also includes `workflow_jobs`, `policy_rules`, and `audit_events` for governance and gate-level telemetry.
 It now also includes `user_tribe_membership` and tribe-scoped read policies.
 
-After running schema, seed user access rows:
+After running schema, seed user access rows (unless auto-sync maps are configured):
 
 ```sql
 insert into public.user_tribe_membership (user_id, tribe, role)

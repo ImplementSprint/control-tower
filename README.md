@@ -44,6 +44,8 @@ cp .env.example .env.local
 - NEXT_PUBLIC_GITHUB_OAUTH_SCOPES (default `user:email`)
 - NEXT_PUBLIC_GITHUB_REQUIRE_ORG_MEMBERSHIP (default `false`)
 - GITHUB_ALLOWED_ORG (optional, comma-separated; required only when org gate is enabled)
+- GITHUB_USER_TRIBE_ROLE_MAP_JSON (optional username/email -> tribe/role auto-sync)
+- GITHUB_TEAM_TRIBE_ROLE_MAP_JSON (optional team -> tribe/role auto-sync)
 - GITHUB_WEBHOOK_SECRET (for GitHub webhook signature verification)
 - TRIBE_REPO_MAP_JSON (optional explicit repo-to-tribe mapping)
 - INGESTION_TOKEN (required to protect sync endpoint)
@@ -58,10 +60,13 @@ Auth + access notes:
 1. Sign-in is via GitHub OAuth at `/auth/login`.
 2. OAuth uses `NEXT_PUBLIC_GITHUB_OAUTH_SCOPES` (minimal default: `user:email`).
 3. Org-based gating is enabled automatically when `GITHUB_ALLOWED_ORG` is set (or explicitly via `GITHUB_REQUIRE_ORG_MEMBERSHIP=true`).
-4. When org gating is enabled, include `read:org` in `NEXT_PUBLIC_GITHUB_OAUTH_SCOPES`.
-5. When org gating is disabled (default), login uses minimal scopes and no org membership checks.
-5. Tribe access is controlled by `user_tribe_membership` rows.
-6. Deployment create/update APIs are reserved for `platform_admin` users.
+4. Optional auto-sync can upsert `user_tribe_membership` on login from:
+	- `GITHUB_USER_TRIBE_ROLE_MAP_JSON` (GitHub username/email mapping)
+	- `GITHUB_TEAM_TRIBE_ROLE_MAP_JSON` (GitHub team mapping)
+5. When org gating or team-based auto-sync is enabled, include `read:org` in `NEXT_PUBLIC_GITHUB_OAUTH_SCOPES`.
+6. When org gating and team auto-sync are disabled (default), login uses minimal scopes and no org/team membership checks.
+7. Tribe access is controlled by `user_tribe_membership` rows.
+8. Deployment create/update APIs are reserved for `platform_admin` users.
 
 Recommended hardening path:
 1. Keep OAuth scopes minimal for identity (`user:email`) unless org policy requires `read:org`.
@@ -83,7 +88,7 @@ If you already ran schema.sql before, run it again to apply:
 2. `user_tribe_membership` access table.
 3. RLS policies for tribe-scoped read access.
 
-5. Seed access mapping (example SQL):
+5. Seed access mapping (example SQL, only needed when auto-sync maps are not configured):
 
 ```sql
 insert into public.user_tribe_membership (user_id, tribe, role)

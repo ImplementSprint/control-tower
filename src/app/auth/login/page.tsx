@@ -2,7 +2,6 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Check, Circle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
@@ -20,7 +19,7 @@ const errorMessages: Record<string, string> = {
   org_policy_misconfigured:
     "Organization policy enforcement is enabled but no allowed orgs are configured. Set GITHUB_ALLOWED_ORG on the server.",
   github_scope_missing:
-    "GitHub authorization is missing required scope for org policy checks. Include read:org only when org enforcement is intentionally enabled.",
+    "GitHub authorization is missing required scope for org policy or membership sync checks. Include read:org when org enforcement or team-based role sync is enabled.",
   org_membership_required:
     "Access is restricted by organization membership policy for this deployment.",
   org_check_failed: "GitHub org verification failed. Please try again.",
@@ -42,75 +41,6 @@ const enforceOrgPolicy =
   explicitEnforceOrgPolicy || configuredAllowedOrgHint.length > 0;
 
 const allowedOrgHint = enforceOrgPolicy ? configuredAllowedOrgHint : "";
-
-type SideNote = {
-  text: string;
-  time: string;
-  position: string;
-  rotate: number;
-  done?: boolean;
-};
-
-const floatingTopNotes = [
-  { text: "Bake a cake", time: "18:00", position: "7%", rotate: 21 },
-  { text: "Brunch with Ava", time: "10:30", position: "21%", rotate: 16, done: true },
-  { text: "Family BBQ", time: "14:00", position: "34%", rotate: 8, done: true },
-  { text: "Plan for diversity", time: "11:00", position: "47%", rotate: 12 },
-  { text: "Go to the gym", time: "19:00", position: "61%", rotate: -8 },
-  { text: "Hang with Friends", time: "23:00", position: "75%", rotate: 9 },
-] satisfies SideNote[];
-
-const floatingBottomNotes = [
-  { text: "Plan for diversity", time: "10:00", position: "11%", rotate: -10 },
-  { text: "Brunch with Felix", time: "14:00", position: "27%", rotate: -8, done: true },
-  { text: "Go to the gym", time: "19:00", position: "43%", rotate: -10 },
-  { text: "Brunch with Felix", time: "14:00", position: "58%", rotate: -9 },
-  { text: "Go to the gym", time: "19:00", position: "73%", rotate: -8 },
-] satisfies SideNote[];
-
-const floatingLeftNotes = [
-  { text: "Sign up with Ava", time: "10:00", position: "9%", rotate: 19 },
-  { text: "Buy a new car", time: "12:00", position: "19%", rotate: 14 },
-  { text: "Do something fun", time: "15:30", position: "29%", rotate: 13 },
-  { text: "Mountain bike", time: "18:00", position: "39%", rotate: 18 },
-  { text: "Meet with Ava", time: "11:00", position: "49%", rotate: 16 },
-  { text: "Plan for Amie", time: "17:00", position: "59%", rotate: 15 },
-  { text: "Go with Ava", time: "09:00", position: "69%", rotate: 13 },
-  { text: "Plan for Amie", time: "17:00", position: "79%", rotate: 16 },
-] satisfies SideNote[];
-
-const floatingRightNotes = [
-  { text: "Sign up for Ava", time: "10:00", position: "11%", rotate: 18 },
-  { text: "Ship new app", time: "20:00", position: "20%", rotate: 12, done: true },
-  { text: "Buy a new car", time: "12:00", position: "29%", rotate: 11 },
-  { text: "Build something", time: "08:00", position: "38%", rotate: 14, done: true },
-  { text: "Ship new app", time: "20:00", position: "47%", rotate: 12, done: true },
-  { text: "Meet with Ava", time: "16:00", position: "56%", rotate: 14 },
-  { text: "Mountain bike", time: "18:00", position: "65%", rotate: 15 },
-  { text: "Close release", time: "08:00", position: "74%", rotate: 12, done: true },
-  { text: "Prep rollout", time: "07:30", position: "83%", rotate: 14 },
-] satisfies SideNote[];
-
-
-function FloatingNoteCard({ note }: { note: SideNote }) {
-  return (
-    <div className="min-w-[166px] rounded-[18px] border border-slate-200 bg-white px-3 py-2 shadow-[0_3px_9px_rgba(15,23,42,0.08)]">
-      <div className="flex items-start gap-1.5">
-        <span className="mt-[1px] inline-flex size-3.5 items-center justify-center text-slate-500">
-          {note.done ? (
-            <Check className="size-3.5 stroke-[2.5]" aria-hidden="true" />
-          ) : (
-            <Circle className="size-3.5" aria-hidden="true" />
-          )}
-        </span>
-        <div>
-          <p className="text-[11px] font-medium leading-4 text-slate-900">{note.text}</p>
-          <p className="mt-0.5 pl-[1px] text-[10px] leading-3 text-slate-400">{note.time}</p>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function normalizeScopeString(value: string) {
   return Array.from(
@@ -247,60 +177,6 @@ function LoginContent() {
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#ececef] px-4 py-10 sm:px-6">
-      <div className="pointer-events-none absolute inset-x-0 top-0 hidden h-20 xl:block">
-        {floatingTopNotes.map((note) => (
-          <div
-            key={`top-${note.text}-${note.position}`}
-            className="absolute -top-8"
-            style={{
-              left: note.position,
-              transform: `translateX(-50%) rotate(${note.rotate}deg)`,
-            }}
-          >
-            <FloatingNoteCard note={note} />
-          </div>
-        ))}
-      </div>
-
-      <div className="pointer-events-none absolute inset-y-0 left-0 hidden w-40 xl:block">
-        {floatingLeftNotes.map((note) => (
-          <div
-            key={`left-${note.text}-${note.position}`}
-            className="absolute -left-16"
-            style={{ top: note.position, transform: `rotate(${note.rotate}deg)` }}
-          >
-            <FloatingNoteCard note={note} />
-          </div>
-        ))}
-      </div>
-
-      <div className="pointer-events-none absolute inset-y-0 right-0 hidden w-40 xl:block">
-        {floatingRightNotes.map((note) => (
-          <div
-            key={`right-${note.text}-${note.position}`}
-            className="absolute -right-16"
-            style={{ top: note.position, transform: `rotate(${note.rotate}deg)` }}
-          >
-            <FloatingNoteCard note={note} />
-          </div>
-        ))}
-      </div>
-
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 hidden h-20 xl:block">
-        {floatingBottomNotes.map((note) => (
-          <div
-            key={`bottom-${note.text}-${note.position}`}
-            className="absolute -bottom-8"
-            style={{
-              left: note.position,
-              transform: `translateX(-50%) rotate(${note.rotate}deg)`,
-            }}
-          >
-            <FloatingNoteCard note={note} />
-          </div>
-        ))}
-      </div>
-
       <div className="relative mx-auto flex min-h-[calc(100vh-5rem)] w-full max-w-3xl items-center justify-center">
         <section className="w-full max-w-[620px] text-center">
           <div className="mx-auto inline-grid size-9 grid-cols-2 gap-1.5">
