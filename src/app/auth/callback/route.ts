@@ -15,6 +15,7 @@ import {
   redirectWithSessionCookies,
   resolveSafeNextPath,
 } from "@/lib/auth/callback-response";
+import { logEvent } from "@/lib/observability";
 
 type SupabaseRouteContext = {
   supabase: ReturnType<typeof createServerClient>;
@@ -52,10 +53,10 @@ export async function GET(request: Request) {
   const nextPath = resolveSafeNextPath(url.searchParams.get("next"));
   const { supabase, sessionResponse } = await createSupabaseRouteContext();
 
-  console.log("[auth/callback] started", { hasCode: !!code, nextPath });
+  logEvent("info", "auth.callback.started", { hasCode: !!code, nextPath });
 
   if (!code) {
-    console.log("[auth/callback] FAIL: missing_oauth_code");
+    logEvent("warn", "auth.callback.failed", { reason: "missing_oauth_code" });
     const redirectUrl = new URL("/auth/login", url.origin);
     redirectUrl.searchParams.set("error", "missing_oauth_code");
     return redirectWithSessionCookies(sessionResponse, redirectUrl);
@@ -64,24 +65,23 @@ export async function GET(request: Request) {
   const { data, error } = await supabase.auth.exchangeCodeForSession(code);
 
   if (error || !data.session) {
-    console.log("[auth/callback] FAIL: oauth_exchange_failed", error?.message);
+    logEvent("warn", "auth.callback.failed", { reason: "oauth_exchange_failed", error: error?.message });
     const redirectUrl = new URL("/auth/login", url.origin);
     redirectUrl.searchParams.set("error", "oauth_exchange_failed");
     return redirectWithSessionCookies(sessionResponse, redirectUrl);
   }
 
-  console.log("[auth/callback] session exchanged", {
-    userId: data.user?.id,
+  logEvent("info", "auth.callback.session_exchanged", {
+    userId: data.user?.id?.slice(0, 8),
     hasProviderToken: !!data.session.provider_token,
-    email: data.session.user?.email,
   });
 
   const { requiredOrgs, enforceOrgPolicy } = resolveGitHubOrgPolicyConfig();
 
-  console.log("[auth/callback] org policy", { enforceOrgPolicy, requiredOrgs });
+  logEvent("info", "auth.callback.org_policy", { enforceOrgPolicy, orgCount: requiredOrgs.length });
 
   if (enforceOrgPolicy && requiredOrgs.length === 0) {
-    console.log("[auth/callback] FAIL: org_policy_misconfigured");
+    logEvent("warn", "auth.callback.failed", { reason: "org_policy_misconfigured" });
     await supabase.auth.signOut();
     const redirectUrl = new URL("/auth/login", url.origin);
     redirectUrl.searchParams.set("error", "org_policy_misconfigured");
@@ -92,7 +92,7 @@ export async function GET(request: Request) {
     const providerToken = data.session.provider_token;
 
     if (!providerToken) {
-      console.log("[auth/callback] FAIL: github_scope_missing (no provider token)");
+      logEvent("warn", "auth.callback.failed", { reason: "github_scope_missing", detail: "no_provider_token" });
       await supabase.auth.signOut();
       const redirectUrl = new URL("/auth/login", url.origin);
       redirectUrl.searchParams.set("error", "github_scope_missing");
@@ -105,7 +105,7 @@ export async function GET(request: Request) {
 
       for (const org of requiredOrgs) {
         const result = await isAllowedGithubOrgMember(providerToken, org);
-        console.log("[auth/callback] org check", { org, allowed: result.allowed, scopeMissing: result.scopeMissing });
+        logEvent("info", "auth.callback.org_check", { allowed: result.allowed, scopeMissing: result.scopeMissing });
 
         if (result.scopeMissing) {
           scopeMissing = true;
@@ -119,15 +119,15 @@ export async function GET(request: Request) {
       }
 
       if (!isAllowed) {
-        const errorType = scopeMissing ? "github_scope_missing" : "org_membership_required";
-        console.log("[auth/callback] FAIL:", errorType);
+        const reason = scopeMissing ? "github_scope_missing" : "org_membership_required";
+        logEvent("warn", "auth.callback.failed", { reason });
         await supabase.auth.signOut();
         const redirectUrl = new URL("/auth/login", url.origin);
-        redirectUrl.searchParams.set("error", errorType);
+        redirectUrl.searchParams.set("error", reason);
         return redirectWithSessionCookies(sessionResponse, redirectUrl);
       }
     } catch (orgError) {
-      console.log("[auth/callback] FAIL: org_check_failed", orgError instanceof Error ? orgError.message : orgError);
+      logEvent("error", "auth.callback.failed", { reason: "org_check_failed", error: orgError instanceof Error ? orgError.message : "unknown" });
       await supabase.auth.signOut();
       const redirectUrl = new URL("/auth/login", url.origin);
       redirectUrl.searchParams.set("error", "org_check_failed");
@@ -135,7 +135,7 @@ export async function GET(request: Request) {
     }
   }
 
-  console.log("[auth/callback] org policy passed");
+  logEvent("info", "auth.callback.org_policy_passed");
 
   const authenticatedUserId = data.user?.id ?? data.session.user?.id ?? null;
 
@@ -147,17 +147,16 @@ export async function GET(request: Request) {
       >;
 
       try {
-        console.log("[auth/callback] resolving auto membership assignments...");
+        logEvent("info", "auth.callback.membership_sync_started");
         autoAssignmentsResult = await resolveAutomaticMembershipAssignments({
           user: (data.user ?? {
             email: data.session.user?.email ?? null,
           }) as AuthenticatedUserLike,
           providerToken: data.session.provider_token ?? null,
         });
-        console.log("[auth/callback] auto assignments result", {
-          count: autoAssignmentsResult.assignments.length,
+        logEvent("info", "auth.callback.membership_sync_complete", {
+          assignmentCount: autoAssignmentsResult.assignments.length,
           scopeMissing: autoAssignmentsResult.scopeMissing,
-          tribes: autoAssignmentsResult.assignments.map((a) => a.tribe),
         });
       } catch (error) {
         const details = error instanceof Error ? error.message : "Unknown error";
@@ -166,6 +165,7 @@ export async function GET(request: Request) {
           details.includes("GITHUB_TEAM_TRIBE_ROLE_MAP_JSON");
 
         if (isMembershipMapMisconfigured) {
+          logEvent("warn", "auth.callback.failed", { reason: "membership_map_misconfigured" });
           await supabase.auth.signOut();
           const redirectUrl = new URL("/auth/login", url.origin);
           redirectUrl.searchParams.set("error", "membership_map_misconfigured");
@@ -181,6 +181,7 @@ export async function GET(request: Request) {
       } = autoAssignmentsResult;
 
       if (autoSyncScopeMissing) {
+        logEvent("warn", "auth.callback.failed", { reason: "github_scope_missing", detail: "team_sync" });
         await supabase.auth.signOut();
         const redirectUrl = new URL("/auth/login", url.origin);
         redirectUrl.searchParams.set("error", "github_scope_missing");
@@ -201,6 +202,7 @@ export async function GET(request: Request) {
           );
 
         if (upsertError) {
+          logEvent("error", "auth.callback.membership_upsert_failed", { error: upsertError.message });
           const deniedUrl = new URL("/auth/denied", url.origin);
           deniedUrl.searchParams.set("reason", "membership_check_failed");
           deniedUrl.searchParams.set("next", nextPath);
@@ -215,12 +217,13 @@ export async function GET(request: Request) {
         .eq("is_active", true)
         .limit(1);
 
-      console.log("[auth/callback] tribe memberships query", {
-        count: memberships?.length ?? 0,
-        error: membershipError?.message,
+      logEvent("info", "auth.callback.membership_check", {
+        hasMembership: (memberships?.length ?? 0) > 0,
+        queryError: !!membershipError,
       });
 
       if (membershipError) {
+        logEvent("error", "auth.callback.membership_query_failed", { error: membershipError.message });
         const deniedUrl = new URL("/auth/denied", url.origin);
         deniedUrl.searchParams.set("reason", "membership_table_unavailable");
         deniedUrl.searchParams.set("next", nextPath);
@@ -241,16 +244,19 @@ export async function GET(request: Request) {
           metadataRole === "platform_admin" || metadataTribe.length > 0;
 
         if (hasMetadataFallbackAccess) {
+          logEvent("info", "auth.callback.metadata_fallback_access_granted");
           const redirectUrl = new URL(nextPath, url.origin);
           return redirectWithSessionCookies(sessionResponse, redirectUrl);
         }
 
+        logEvent("warn", "auth.callback.access_denied", { reason: "tribe_membership_required" });
         const deniedUrl = new URL("/auth/denied", url.origin);
         deniedUrl.searchParams.set("reason", "tribe_membership_required");
         deniedUrl.searchParams.set("next", nextPath);
         return redirectWithSessionCookies(sessionResponse, deniedUrl);
       }
     } catch {
+      logEvent("error", "auth.callback.unexpected_error");
       const deniedUrl = new URL("/auth/denied", url.origin);
       deniedUrl.searchParams.set("reason", "membership_check_failed");
       deniedUrl.searchParams.set("next", nextPath);
@@ -258,7 +264,7 @@ export async function GET(request: Request) {
     }
   }
 
-  console.log("[auth/callback] SUCCESS: redirecting to", nextPath);
+  logEvent("info", "auth.callback.success", { nextPath });
   const redirectUrl = new URL(nextPath, url.origin);
   return redirectWithSessionCookies(sessionResponse, redirectUrl);
 }

@@ -14,6 +14,8 @@ import {
 } from "@/lib/control-tower/github-run-mapping";
 import { upsertDeploymentFromRunIdentity } from "@/lib/control-tower/deployment-ingestion";
 import { logEvent } from "@/lib/observability";
+import { evaluateAlertRules } from "@/lib/alerts/evaluate";
+import { dispatchAlerts } from "@/lib/alerts/dispatch";
 
 type GitHubWorkflowRunPayload = {
 	action?: string;
@@ -249,6 +251,18 @@ export async function POST(request: Request) {
 		});
 
 		revalidatePath("/");
+
+		// Fire-and-forget: evaluate alert rules for the affected tribe after ingestion.
+		// Only runs when a workflow_run completes — don't await so the webhook response is not delayed.
+		if (status === "success" || status === "failed" || status === "cancelled") {
+			void evaluateAlertRules(tribe).then((triggered) => dispatchAlerts(triggered)).catch((err: unknown) => {
+				logEvent("warn", "github.webhook.alert_evaluation_failed", {
+					repository: repositoryName,
+					tribe,
+					details: err instanceof Error ? err.message : "Unknown error",
+				});
+			});
+		}
 
 		try {
 			await createAuditEvent(supabase, {

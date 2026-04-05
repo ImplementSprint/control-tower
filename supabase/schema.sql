@@ -280,3 +280,76 @@ using (
       and (m.role = 'platform_admin' or m.tribe = deployments.tribe)
   )
 );
+
+-- ============================================================
+-- Phase 4: Notifications & Alerts
+-- ============================================================
+
+create table if not exists public.alert_rules (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  tribe text,
+  rule_type text not null check (rule_type in (
+    'success_rate_below',
+    'failed_run_count_above',
+    'duration_above'
+  )),
+  threshold numeric not null,
+  window_minutes integer not null default 1440,
+  is_enabled boolean not null default true,
+  channels jsonb not null default '["in_app"]'::jsonb,
+  created_by text,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+create table if not exists public.alert_channels (
+  id uuid primary key default gen_random_uuid(),
+  tribe text,
+  channel_type text not null check (channel_type in ('slack_webhook', 'in_app')),
+  config jsonb not null default '{}'::jsonb,
+  is_enabled boolean not null default true,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+create table if not exists public.notifications (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  tribe text,
+  title text not null,
+  body text,
+  severity text not null default 'info' check (severity in ('info', 'warning', 'critical')),
+  source_type text,
+  source_id uuid,
+  is_read boolean not null default false,
+  created_at timestamptz not null default timezone('utc', now())
+);
+
+create index if not exists alert_rules_tribe_idx on public.alert_rules (tribe);
+create index if not exists alert_rules_enabled_idx on public.alert_rules (is_enabled);
+create index if not exists alert_channels_tribe_idx on public.alert_channels (tribe);
+create index if not exists notifications_user_idx on public.notifications (user_id, is_read, created_at desc);
+create index if not exists notifications_tribe_idx on public.notifications (tribe);
+
+drop trigger if exists alert_rules_set_updated_at on public.alert_rules;
+create trigger alert_rules_set_updated_at
+before update on public.alert_rules
+for each row
+execute function public.set_updated_at_timestamp();
+
+drop trigger if exists alert_channels_set_updated_at on public.alert_channels;
+create trigger alert_channels_set_updated_at
+before update on public.alert_channels
+for each row
+execute function public.set_updated_at_timestamp();
+
+alter table public.alert_rules enable row level security;
+alter table public.alert_channels enable row level security;
+alter table public.notifications enable row level security;
+
+drop policy if exists notifications_read_own on public.notifications;
+create policy notifications_read_own
+on public.notifications
+for select
+using (user_id = auth.uid());

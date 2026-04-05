@@ -31,6 +31,8 @@ import {
   getRunNextAction,
   type FocusFilter,
 } from "@/lib/dashboard/home-presenters";
+import { MetricsSection } from "@/components/dashboard/metrics-section";
+import { NotificationBell } from "@/components/notifications/notification-bell";
 
 type TribeHealthRow = {
   tribe: string;
@@ -389,6 +391,7 @@ export default async function Home({ searchParams }: HomePageProps) {
           </div>
 
           <div className="flex items-center gap-3">
+            <NotificationBell />
             <div className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-card px-3 py-1.5 shadow-sm">
               {accessScope.githubAvatarUrl ? (
                 <span
@@ -516,40 +519,31 @@ export default async function Home({ searchParams }: HomePageProps) {
         ) : null}
 
         {currentTab === "metrics" ? (
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <section className="space-y-4">
+            <MetricsSection windowDays={14} />
             {tribeHealthError ? (
               <Alert variant="destructive">
-                <AlertTitle>Tribe Metrics Unavailable</AlertTitle>
+                <AlertTitle>Tribe Health Unavailable</AlertTitle>
                 <AlertDescription>{tribeHealthError}</AlertDescription>
               </Alert>
-            ) : tribeHealth.length === 0 ? (
-              <p className="rounded-xl border border-dashed border-border/70 bg-muted/20 p-6 text-sm text-muted-foreground">
-                No tribe telemetry yet. Trigger workflows in connected repositories.
-              </p>
-            ) : (
-              tribeHealth.map((item) => (
-                <Card key={item.tribe} className="rounded-2xl border-border/70 bg-card/95 shadow-sm">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base">{item.tribe}</CardTitle>
-                    <CardDescription>{item.totalRuns} runs in last 14 days</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-2 text-sm text-muted-foreground">
-                    <p>
-                      Success rate: <span className="font-medium text-foreground">{item.successRate}%</span>
-                    </p>
-                    <p>
-                      Failed runs: <span className="font-medium text-foreground">{item.failedRuns}</span>
-                    </p>
-                    <p>
-                      Running runs: <span className="font-medium text-foreground">{item.runningRuns}</span>
-                    </p>
-                    <p>
-                      Avg duration: <span className="font-medium text-foreground">{item.averageDurationSeconds}s</span>
-                    </p>
-                  </CardContent>
-                </Card>
-              ))
-            )}
+            ) : tribeHealth.length > 0 ? (
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {tribeHealth.map((item) => (
+                  <Card key={item.tribe} className="rounded-2xl border-border/70 bg-card/95 shadow-sm">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">{item.tribe}</CardTitle>
+                      <CardDescription>{item.totalRuns} runs in last 14 days</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-2 text-sm text-muted-foreground">
+                      <p>Success rate: <span className="font-medium text-foreground">{item.successRate}%</span></p>
+                      <p>Failed runs: <span className="font-medium text-foreground">{item.failedRuns}</span></p>
+                      <p>Running runs: <span className="font-medium text-foreground">{item.runningRuns}</span></p>
+                      <p>Avg duration: <span className="font-medium text-foreground">{item.averageDurationSeconds}s</span></p>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            ) : null}
           </section>
         ) : null}
 
