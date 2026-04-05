@@ -15,6 +15,29 @@ type TimelinePoint = {
   avg_duration_seconds: number;
 };
 
+type TimelineRpcRow = {
+  metric_date: string;
+  total_runs: number | string | null;
+  success_count: number | string | null;
+  failed_count: number | string | null;
+  running_count: number | string | null;
+  cancelled_count: number | string | null;
+  average_duration_seconds: number | string | null;
+};
+
+function toNumber(value: number | string | null | undefined) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  return 0;
+}
+
 export async function GET(request: Request) {
   try {
     const { accessScope, response } = await requireAuthenticatedAccessScope();
@@ -34,65 +57,31 @@ export async function GET(request: Request) {
       return NextResponse.json({ window_days: windowDays, data: [] });
     }
 
-    const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
     const supabase = createSupabaseAdminClient();
 
-    let query = supabase
-      .from("workflow_runs")
-      .select("status, duration_seconds, created_at")
-      .gte("created_at", since)
-      .limit(5000);
+    const scopedTribeFilter =
+      scopedTribes === null
+        ? null
+        : scopedTribes.map((tribe) => tribe.toLowerCase());
 
-    if (scopedTribes !== null) {
-      query = query.in("tribe", scopedTribes);
-    }
-
-    const { data, error } = await query;
+    const { data, error } = await supabase.rpc("get_runs_timeline_metrics", {
+      p_window_days: windowDays,
+      p_tribes: scopedTribeFilter,
+    });
 
     if (error) {
       return jsonError("Failed to fetch timeline data.", 500, { details: error.message });
     }
 
-    const byDay = new Map<
-      string,
-      { total: number; success: number; failed: number; running: number; cancelled: number; durationSum: number; durationCount: number }
-    >();
-
-    for (const row of data ?? []) {
-      const date = (row.created_at as string).slice(0, 10);
-      const current = byDay.get(date) ?? { total: 0, success: 0, failed: 0, running: 0, cancelled: 0, durationSum: 0, durationCount: 0 };
-
-      current.total += 1;
-      const status = String(row.status ?? "");
-      if (status === "success") current.success += 1;
-      else if (status === "failed") current.failed += 1;
-      else if (status === "running") current.running += 1;
-      else if (status === "cancelled") current.cancelled += 1;
-
-      if (typeof row.duration_seconds === "number") {
-        current.durationSum += row.duration_seconds;
-        current.durationCount += 1;
-      }
-
-      byDay.set(date, current);
-    }
-
-    // Fill in missing days with zeros
-    const points: TimelinePoint[] = [];
-    for (let i = windowDays - 1; i >= 0; i--) {
-      const date = new Date(Date.now() - i * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      const value = byDay.get(date) ?? { total: 0, success: 0, failed: 0, running: 0, cancelled: 0, durationSum: 0, durationCount: 0 };
-
-      points.push({
-        date,
-        total: value.total,
-        success: value.success,
-        failed: value.failed,
-        running: value.running,
-        cancelled: value.cancelled,
-        avg_duration_seconds: value.durationCount > 0 ? Math.round(value.durationSum / value.durationCount) : 0,
-      });
-    }
+    const points: TimelinePoint[] = ((data ?? []) as TimelineRpcRow[]).map((row) => ({
+      date: row.metric_date,
+      total: Math.trunc(toNumber(row.total_runs)),
+      success: Math.trunc(toNumber(row.success_count)),
+      failed: Math.trunc(toNumber(row.failed_count)),
+      running: Math.trunc(toNumber(row.running_count)),
+      cancelled: Math.trunc(toNumber(row.cancelled_count)),
+      avg_duration_seconds: Math.round(toNumber(row.average_duration_seconds)),
+    }));
 
     return NextResponse.json({ window_days: windowDays, data: points });
   } catch (error) {

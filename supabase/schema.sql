@@ -44,6 +44,111 @@ begin
 end;
 $$;
 
+create or replace function public.get_tribe_health_metrics(
+  p_window_days integer default 14,
+  p_tribes text[] default null
+)
+returns table (
+  tribe text,
+  total_runs bigint,
+  success_count bigint,
+  failed_count bigint,
+  running_count bigint,
+  cancelled_count bigint,
+  success_rate numeric,
+  average_duration_seconds integer,
+  last_completed_at timestamptz
+)
+language sql
+stable
+as $$
+  with scoped_runs as (
+    select
+      coalesce(nullif(lower(trim(w.tribe)), ''), 'unmapped') as tribe,
+      w.status,
+      w.duration_seconds,
+      w.completed_at
+    from public.workflow_runs as w
+    where w.created_at >= timezone('utc', now()) - make_interval(days => greatest(p_window_days, 1))
+      and (
+        p_tribes is null
+        or coalesce(nullif(lower(trim(w.tribe)), ''), 'unmapped') = any(p_tribes)
+      )
+  )
+  select
+    sr.tribe,
+    count(*)::bigint as total_runs,
+    count(*) filter (where sr.status = 'success')::bigint as success_count,
+    count(*) filter (where sr.status = 'failed')::bigint as failed_count,
+    count(*) filter (where sr.status = 'running')::bigint as running_count,
+    count(*) filter (where sr.status = 'cancelled')::bigint as cancelled_count,
+    case
+      when count(*) = 0 then 0::numeric
+      else round(
+        (count(*) filter (where sr.status = 'success'))::numeric
+        * 100
+        / count(*)::numeric,
+        1
+      )
+    end as success_rate,
+    coalesce(round(avg(sr.duration_seconds)::numeric), 0)::integer as average_duration_seconds,
+    max(sr.completed_at) as last_completed_at
+  from scoped_runs as sr
+  group by sr.tribe
+  order by total_runs desc;
+$$;
+
+create or replace function public.get_runs_timeline_metrics(
+  p_window_days integer default 14,
+  p_tribes text[] default null
+)
+returns table (
+  metric_date date,
+  total_runs bigint,
+  success_count bigint,
+  failed_count bigint,
+  running_count bigint,
+  cancelled_count bigint,
+  average_duration_seconds integer
+)
+language sql
+stable
+as $$
+  with day_series as (
+    select
+      generate_series(
+        timezone('utc', now())::date - (greatest(p_window_days, 1) - 1),
+        timezone('utc', now())::date,
+        interval '1 day'
+      )::date as metric_date
+  ),
+  scoped_runs as (
+    select
+      timezone('utc', w.created_at)::date as metric_date,
+      w.status,
+      w.duration_seconds
+    from public.workflow_runs as w
+    where w.created_at >= timezone('utc', now()) - make_interval(days => greatest(p_window_days, 1))
+      and (
+        p_tribes is null
+        or coalesce(nullif(lower(trim(w.tribe)), ''), 'unmapped') = any(p_tribes)
+      )
+  )
+  select
+    ds.metric_date,
+    count(sr.metric_date)::bigint as total_runs,
+    count(*) filter (where sr.status = 'success')::bigint as success_count,
+    count(*) filter (where sr.status = 'failed')::bigint as failed_count,
+    count(*) filter (where sr.status = 'running')::bigint as running_count,
+    count(*) filter (where sr.status = 'cancelled')::bigint as cancelled_count,
+    coalesce(round(avg(sr.duration_seconds)::numeric), 0)::integer as average_duration_seconds
+  from day_series as ds
+  left join scoped_runs as sr
+    on sr.metric_date = ds.metric_date
+  group by ds.metric_date
+  order by ds.metric_date;
+$$;
+
 drop trigger if exists deployments_set_updated_at on public.deployments;
 create trigger deployments_set_updated_at
 before update on public.deployments
@@ -133,6 +238,7 @@ create table if not exists public.workflow_jobs (
 create index if not exists repo_tribe_map_tribe_idx on public.repo_tribe_map (tribe);
 create index if not exists user_tribe_membership_user_idx on public.user_tribe_membership (user_id);
 create index if not exists user_tribe_membership_tribe_idx on public.user_tribe_membership (tribe);
+create index if not exists user_tribe_membership_user_active_tribe_idx on public.user_tribe_membership (user_id, is_active, tribe);
 create index if not exists github_webhook_events_event_idx on public.github_webhook_events (event_name, received_at desc);
 create index if not exists github_webhook_events_repository_idx on public.github_webhook_events (repository);
 create index if not exists workflow_runs_repository_idx on public.workflow_runs (repository);
@@ -140,6 +246,8 @@ create index if not exists workflow_runs_tribe_idx on public.workflow_runs (trib
 create index if not exists workflow_runs_branch_idx on public.workflow_runs (branch);
 create index if not exists workflow_runs_status_idx on public.workflow_runs (status);
 create index if not exists workflow_runs_completed_idx on public.workflow_runs (completed_at desc);
+create index if not exists workflow_runs_completed_created_idx on public.workflow_runs (completed_at desc, created_at desc);
+create index if not exists workflow_runs_tribe_created_idx on public.workflow_runs (tribe, created_at desc);
 create index if not exists workflow_jobs_repository_idx on public.workflow_jobs (repository);
 create index if not exists workflow_jobs_run_idx on public.workflow_jobs (repository, run_id, run_attempt);
 create index if not exists workflow_jobs_tribe_idx on public.workflow_jobs (tribe);
@@ -209,6 +317,8 @@ create table if not exists public.audit_events (
 
 create index if not exists policy_rules_enabled_idx on public.policy_rules (is_enabled);
 create index if not exists policy_rules_scope_idx on public.policy_rules (repository, tribe, environment);
+create index if not exists policy_rules_scope_enabled_idx on public.policy_rules (repository, tribe, environment)
+where is_enabled = true;
 create index if not exists audit_events_created_idx on public.audit_events (created_at desc);
 create index if not exists audit_events_repository_idx on public.audit_events (repository);
 create index if not exists audit_events_tribe_idx on public.audit_events (tribe);

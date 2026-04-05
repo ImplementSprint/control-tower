@@ -26,7 +26,7 @@ type JobDetailResult = {
   missing: boolean;
 };
 
-export const dynamic = "force-dynamic";
+export const revalidate = 120;
 
 function canAccessTribe(scope: AccessScope, tribe: string | null) {
   if (scope.isPlatformAdmin) {
@@ -116,8 +116,6 @@ async function getJobDetails(scope: AccessScope, id: string): Promise<JobDetailR
       runQuery = runQuery.in("tribe", scope.tribes);
     }
 
-    const { data: runData } = await runQuery.maybeSingle();
-
     let siblingsQuery = supabase
       .from("workflow_jobs")
       .select(
@@ -127,13 +125,16 @@ async function getJobDetails(scope: AccessScope, id: string): Promise<JobDetailR
       .eq("run_id", job.run_id)
       .eq("run_attempt", job.run_attempt)
       .order("created_at", { ascending: false })
-      .limit(100);
+      .limit(50);
 
     if (!scope.isPlatformAdmin) {
       siblingsQuery = siblingsQuery.in("tribe", scope.tribes);
     }
 
-    const { data: siblingsData, error: siblingsError } = await siblingsQuery;
+    const [
+      { data: runData },
+      { data: siblingsData, error: siblingsError },
+    ] = await Promise.all([runQuery.maybeSingle(), siblingsQuery]);
 
     if (siblingsError) {
       return {

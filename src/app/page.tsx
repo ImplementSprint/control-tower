@@ -16,11 +16,15 @@ import {
 } from "@/lib/auth/access";
 import { formatRelativeTime, formatRuntime } from "@/lib/formatters";
 import { getSingleParam } from "@/lib/query-params";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type {
   Deployment,
   WorkflowRun,
 } from "@/lib/supabase/types";
+import { getTribeHealth } from "@/lib/dashboard/tribe-health";
+import {
+  getScopedDeployments,
+  getScopedWorkflowRuns,
+} from "@/lib/dashboard/query-cache";
 import {
   filterDeployments,
   filterWorkflowRuns,
@@ -34,22 +38,13 @@ import {
 import { MetricsSection } from "@/components/dashboard/metrics-section";
 import { NotificationBell } from "@/components/notifications/notification-bell";
 
-type TribeHealthRow = {
-  tribe: string;
-  totalRuns: number;
-  successRate: number;
-  failedRuns: number;
-  runningRuns: number;
-  averageDurationSeconds: number;
-};
-
 type HomePageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
 type DashboardTab = "summary" | "runs" | "metrics";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 120;
 
 const tabLabels: Record<DashboardTab, string> = {
   summary: "Summary",
@@ -119,36 +114,10 @@ function getInitials(label: string | null) {
 
 async function getDeployments(scope: AccessScope) {
   try {
-    if (!scope.isPlatformAdmin && scope.tribes.length === 0) {
-      return {
-        deployments: [] as Deployment[],
-        error: null,
-      };
-    }
-
-    const supabase = createSupabaseAdminClient();
-    let query = supabase
-      .from("deployments")
-      .select("id, repository, tribe, branch, environment, status, summary, commit_sha, duration_seconds, created_at, updated_at")
-      .order("created_at", { ascending: false })
-      .limit(50);
-
-    if (!scope.isPlatformAdmin) {
-      query = query.in("tribe", scope.tribes);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      return {
-        deployments: [] as Deployment[],
-        error:
-          "Supabase query failed. Run supabase/schema.sql and verify your environment variables.",
-      };
-    }
+    const deployments = await getScopedDeployments(scope, { limit: 50 });
 
     return {
-      deployments: (data ?? []) as Deployment[],
+      deployments,
       error: null,
     };
   } catch (error) {
@@ -164,38 +133,10 @@ async function getDeployments(scope: AccessScope) {
 
 async function getWorkflowRuns(scope: AccessScope) {
   try {
-    if (!scope.isPlatformAdmin && scope.tribes.length === 0) {
-      return {
-        runs: [] as WorkflowRun[],
-        error: null,
-      };
-    }
-
-    const supabase = createSupabaseAdminClient();
-    let query = supabase
-      .from("workflow_runs")
-      .select(
-        "id, repository, run_id, run_attempt, workflow_name, branch, environment, tribe, status, github_status, github_conclusion, event_name, action, run_url, commit_sha, started_at, completed_at, duration_seconds, created_at, updated_at",
-      )
-      .order("completed_at", { ascending: false, nullsFirst: false })
-      .order("created_at", { ascending: false })
-      .limit(80);
-
-    if (!scope.isPlatformAdmin) {
-      query = query.in("tribe", scope.tribes);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      return {
-        runs: [] as WorkflowRun[],
-        error: "Unable to load workflow runs for the runs tab.",
-      };
-    }
+    const runs = await getScopedWorkflowRuns(scope, { status: "all", limit: 50 });
 
     return {
-      runs: (data ?? []) as WorkflowRun[],
+      runs,
       error: null,
     };
   } catch (error) {
@@ -205,117 +146,6 @@ async function getWorkflowRuns(scope: AccessScope) {
         error instanceof Error
           ? error.message
           : "Unexpected error while loading workflow runs.",
-    };
-  }
-}
-
-async function getTribeHealth(scope: AccessScope, windowDays = 14) {
-  try {
-    if (!scope.isPlatformAdmin && scope.tribes.length === 0) {
-      return {
-        rows: [] as TribeHealthRow[],
-        error: null,
-      };
-    }
-
-    const supabase = createSupabaseAdminClient();
-    const since = new Date(
-      Date.now() - windowDays * 24 * 60 * 60 * 1000,
-    ).toISOString();
-
-    let query = supabase
-      .from("workflow_runs")
-      .select("tribe, status, duration_seconds, created_at")
-      .gte("created_at", since)
-      .limit(5000);
-
-    if (!scope.isPlatformAdmin) {
-      query = query.in("tribe", scope.tribes);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      return {
-        rows: [] as TribeHealthRow[],
-        error: "Unable to load tribe health metrics from workflow runs.",
-      };
-    }
-
-    const byTribe = new Map<
-      string,
-      {
-        total: number;
-        success: number;
-        failed: number;
-        running: number;
-        durationSum: number;
-        durationCount: number;
-      }
-    >();
-
-    for (const run of data ?? []) {
-      const tribe =
-        typeof run.tribe === "string" && run.tribe.trim().length > 0
-          ? run.tribe
-          : "unmapped";
-
-      const current = byTribe.get(tribe) ?? {
-        total: 0,
-        success: 0,
-        failed: 0,
-        running: 0,
-        durationSum: 0,
-        durationCount: 0,
-      };
-
-      current.total += 1;
-      if (run.status === "success") {
-        current.success += 1;
-      } else if (run.status === "failed") {
-        current.failed += 1;
-      } else if (run.status === "running") {
-        current.running += 1;
-      }
-
-      if (typeof run.duration_seconds === "number") {
-        current.durationSum += run.duration_seconds;
-        current.durationCount += 1;
-      }
-
-      byTribe.set(tribe, current);
-    }
-
-    const rows = Array.from(byTribe.entries())
-      .map(([tribe, value]) => {
-        const successRate = value.total > 0 ? (value.success / value.total) * 100 : 0;
-        const averageDurationSeconds =
-          value.durationCount > 0
-            ? Math.round(value.durationSum / value.durationCount)
-            : 0;
-
-        return {
-          tribe,
-          totalRuns: value.total,
-          successRate: Math.round(successRate * 10) / 10,
-          failedRuns: value.failed,
-          runningRuns: value.running,
-          averageDurationSeconds,
-        } satisfies TribeHealthRow;
-      })
-      .sort((a, b) => b.totalRuns - a.totalRuns);
-
-    return {
-      rows,
-      error: null,
-    };
-  } catch (error) {
-    return {
-      rows: [] as TribeHealthRow[],
-      error:
-        error instanceof Error
-          ? error.message
-          : "Unexpected error while loading tribe health metrics.",
     };
   }
 }

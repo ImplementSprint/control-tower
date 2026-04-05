@@ -36,53 +36,20 @@ export async function upsertDeploymentFromRunIdentity(
     run_attempt: input.runAttempt,
   };
 
-  const { data: existingRow, error: lookupError } = await supabase
+  const { data: upsertedRow, error: upsertError } = await supabase
     .from("deployments")
-    .select("id")
-    .eq("repository", input.repository)
-    .eq("run_id", input.runId)
-    .eq("run_attempt", input.runAttempt)
-    .limit(1)
-    .maybeSingle();
-
-  if (lookupError) {
-    throw new Error(
-      `Failed to lookup deployment by run identity (${input.repository}/${input.runId}/${input.runAttempt}): ${lookupError.message}`,
-    );
-  }
-
-  if (existingRow?.id) {
-    const { error: updateError } = await supabase
-      .from("deployments")
-      .update(payload)
-      .eq("id", existingRow.id);
-
-    if (updateError) {
-      throw new Error(
-        `Failed to update deployment by run identity (${input.repository}/${input.runId}/${input.runAttempt}): ${updateError.message}`,
-      );
-    }
-
-    return {
-      deploymentId: existingRow.id,
-      wasCreated: false,
-    };
-  }
-
-  const { data: insertedRow, error: insertError } = await supabase
-    .from("deployments")
-    .insert(payload)
+    .upsert(payload, { onConflict: "repository,run_id,run_attempt" })
     .select("id")
     .single();
 
-  if (insertError) {
+  if (upsertError) {
     throw new Error(
-      `Failed to insert deployment by run identity (${input.repository}/${input.runId}/${input.runAttempt}): ${insertError.message}`,
+      `Failed to upsert deployment by run identity (${input.repository}/${input.runId}/${input.runAttempt}): ${upsertError.message}`,
     );
   }
 
   return {
-    deploymentId: insertedRow.id,
+    deploymentId: upsertedRow.id,
     wasCreated: true,
   };
 }

@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getScopedTribes } from "@/lib/auth/access";
 import { requireAuthenticatedAccessScope } from "@/lib/api/auth";
 import { jsonError } from "@/lib/api/responses";
@@ -7,6 +6,7 @@ import {
   getTrimmedSearchParam,
   parseBoundedIntegerParam,
 } from "@/lib/api/params";
+import { getTribeHealth } from "@/lib/dashboard/tribe-health";
 
 type TribeMetricRow = {
   tribe: string;
@@ -41,118 +41,37 @@ export async function GET(request: Request) {
     if (scopedTribes !== null && scopedTribes.length === 0) {
       return NextResponse.json({ window_days: windowDays, sampled_runs: 0, data: [] });
     }
+    const effectiveScope =
+      scopedTribes === null
+        ? accessScope
+        : {
+            ...accessScope,
+            isPlatformAdmin: false,
+            tribes: scopedTribes,
+          };
 
-    const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
-    const supabase = createSupabaseAdminClient();
-
-    let query = supabase
-      .from("workflow_runs")
-      .select("tribe, status, duration_seconds, completed_at, created_at")
-      .gte("created_at", since)
-      .limit(5000);
-
-    if (scopedTribes !== null) {
-      query = query.in("tribe", scopedTribes);
-    }
-
-    const { data, error } = await query;
+    const { rows, error } = await getTribeHealth(effectiveScope, windowDays);
 
     if (error) {
-      return jsonError("Failed to fetch workflow runs for tribe metrics.", 500, {
-        details: error.message,
-      });
+      return jsonError(error, 500);
     }
 
-    const rows = data ?? [];
-    const byTribe = new Map<
-      string,
-      {
-        total: number;
-        success: number;
-        failed: number;
-        running: number;
-        cancelled: number;
-        durationSum: number;
-        durationCount: number;
-        lastCompletedAt: string | null;
-      }
-    >();
-
-    for (const row of rows) {
-      const tribe =
-        typeof row.tribe === "string" && row.tribe.trim().length > 0
-          ? row.tribe.trim()
-          : "unmapped";
-
-      const current = byTribe.get(tribe) ?? {
-        total: 0,
-        success: 0,
-        failed: 0,
-        running: 0,
-        cancelled: 0,
-        durationSum: 0,
-        durationCount: 0,
-        lastCompletedAt: null,
-      };
-
-      current.total += 1;
-
-      const status = String(row.status ?? "");
-      if (status === "success") {
-        current.success += 1;
-      } else if (status === "failed") {
-        current.failed += 1;
-      } else if (status === "running") {
-        current.running += 1;
-      } else if (status === "cancelled") {
-        current.cancelled += 1;
-      }
-
-      if (typeof row.duration_seconds === "number") {
-        current.durationSum += row.duration_seconds;
-        current.durationCount += 1;
-      }
-
-      const completedAt =
-        typeof row.completed_at === "string" && row.completed_at.length > 0
-          ? row.completed_at
-          : null;
-
-      if (
-        completedAt &&
-        (!current.lastCompletedAt || Date.parse(completedAt) > Date.parse(current.lastCompletedAt))
-      ) {
-        current.lastCompletedAt = completedAt;
-      }
-
-      byTribe.set(tribe, current);
-    }
-
-    const metrics: TribeMetricRow[] = Array.from(byTribe.entries())
-      .map(([tribe, value]) => {
-        const successRate = value.total > 0 ? (value.success / value.total) * 100 : 0;
-        const avgDuration =
-          value.durationCount > 0
-            ? Math.round(value.durationSum / value.durationCount)
-            : 0;
-
-        return {
-          tribe,
-          total_runs: value.total,
-          success_count: value.success,
-          failed_count: value.failed,
-          running_count: value.running,
-          cancelled_count: value.cancelled,
-          success_rate: Math.round(successRate * 10) / 10,
-          average_duration_seconds: avgDuration,
-          last_completed_at: value.lastCompletedAt,
-        };
-      })
-      .sort((a, b) => b.total_runs - a.total_runs);
+    const sampledRuns = rows.reduce((total, row) => total + row.totalRuns, 0);
+    const metrics: TribeMetricRow[] = rows.map((row) => ({
+      tribe: row.tribe,
+      total_runs: row.totalRuns,
+      success_count: row.successCount,
+      failed_count: row.failedRuns,
+      running_count: row.runningRuns,
+      cancelled_count: row.cancelledRuns,
+      success_rate: row.successRate,
+      average_duration_seconds: row.averageDurationSeconds,
+      last_completed_at: row.lastCompletedAt,
+    }));
 
     return NextResponse.json({
       window_days: windowDays,
-      sampled_runs: rows.length,
+      sampled_runs: sampledRuns,
       data: metrics,
     });
   } catch (error) {

@@ -26,7 +26,7 @@ type RunDetailResult = {
   missing: boolean;
 };
 
-export const dynamic = "force-dynamic";
+export const revalidate = 120;
 
 function canAccessTribe(scope: AccessScope, tribe: string | null) {
   if (scope.isPlatformAdmin) {
@@ -112,22 +112,10 @@ async function getRunDetails(scope: AccessScope, id: string): Promise<RunDetailR
       .eq("run_id", run.run_id)
       .eq("run_attempt", run.run_attempt)
       .order("created_at", { ascending: false })
-      .limit(200);
+      .limit(100);
 
     if (!scope.isPlatformAdmin) {
       jobsQuery = jobsQuery.in("tribe", scope.tribes);
-    }
-
-    const { data: jobsData, error: jobsError } = await jobsQuery;
-
-    if (jobsError) {
-      return {
-        run,
-        jobs: [],
-        events: [],
-        error: "Run loaded, but jobs could not be retrieved.",
-        missing: false,
-      };
     }
 
     let eventsQuery = supabase
@@ -145,7 +133,30 @@ async function getRunDetails(scope: AccessScope, id: string): Promise<RunDetailR
       eventsQuery = eventsQuery.in("tribe", scope.tribes);
     }
 
-    const { data: eventsData } = await eventsQuery;
+    const [
+      { data: jobsData, error: jobsError },
+      { data: eventsData, error: eventsError },
+    ] = await Promise.all([jobsQuery, eventsQuery]);
+
+    if (jobsError) {
+      return {
+        run,
+        jobs: [],
+        events: (eventsData ?? []) as AuditEvent[],
+        error: "Run loaded, but jobs could not be retrieved.",
+        missing: false,
+      };
+    }
+
+    if (eventsError) {
+      return {
+        run,
+        jobs: (jobsData ?? []) as WorkflowJob[],
+        events: [],
+        error: "Run and jobs loaded, but audit events could not be retrieved.",
+        missing: false,
+      };
+    }
 
     return {
       run,
