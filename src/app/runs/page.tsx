@@ -16,8 +16,8 @@ import {
 } from "@/lib/auth/access";
 import { formatRelativeTime, formatRuntime } from "@/lib/formatters";
 import { getSingleParam } from "@/lib/query-params";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type { DeploymentStatus, WorkflowRun } from "@/lib/supabase/types";
+import { getScopedWorkflowRuns } from "@/lib/dashboard/query-cache";
 
 type RunsPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -25,7 +25,7 @@ type RunsPageProps = {
 
 type StatusFilter = "all" | DeploymentStatus;
 
-export const dynamic = "force-dynamic";
+export const revalidate = 120;
 
 const statusLabel: Record<StatusFilter, string> = {
   all: "All",
@@ -69,35 +69,22 @@ async function getRuns(scope: AccessScope, status: StatusFilter) {
       };
     }
 
-    const supabase = createSupabaseAdminClient();
-    let query = supabase
-      .from("workflow_runs")
-      .select(
-        "id, repository, run_id, run_attempt, workflow_name, branch, environment, tribe, status, github_status, github_conclusion, event_name, action, run_url, commit_sha, started_at, completed_at, duration_seconds, created_at, updated_at",
-      )
-      .order("completed_at", { ascending: false, nullsFirst: false })
-      .order("created_at", { ascending: false })
-      .limit(120);
+    const effectiveScope =
+      scopedTribes === null
+        ? scope
+        : {
+            ...scope,
+            isPlatformAdmin: false,
+            tribes: scopedTribes,
+          };
 
-    if (scopedTribes !== null) {
-      query = query.in("tribe", scopedTribes);
-    }
-
-    if (status !== "all") {
-      query = query.eq("status", status);
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      return {
-        runs: [] as WorkflowRun[],
-        error: "Unable to load workflow runs.",
-      };
-    }
+    const runs = await getScopedWorkflowRuns(effectiveScope, {
+      status,
+      limit: 60,
+    });
 
     return {
-      runs: (data ?? []) as WorkflowRun[],
+      runs,
       error: null,
     };
   } catch (error) {

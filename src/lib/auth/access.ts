@@ -1,10 +1,43 @@
 import { createClient } from "@/lib/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { unstable_cache } from "next/cache";
 
 type MembershipRow = {
   tribe: string;
   role: string;
 };
+
+const getCachedMembershipRows = unstable_cache(
+  async (userId: string) => {
+    const adminClient = createSupabaseAdminClient();
+    const { data, error } = await adminClient
+      .from("user_tribe_membership")
+      .select("tribe, role")
+      .eq("user_id", userId)
+      .eq("is_active", true)
+      .limit(100);
+
+    if (error) {
+      const details = error.message.toLowerCase();
+      const isMissingMembershipTable =
+        details.includes("user_tribe_membership") &&
+        (details.includes("does not exist") || details.includes("not found"));
+
+      if (isMissingMembershipTable) {
+        return [] as MembershipRow[];
+      }
+
+      throw new Error(`Failed to load user tribe memberships: ${error.message}`);
+    }
+
+    return (data ?? []) as MembershipRow[];
+  },
+  ["auth-access-scope-memberships"],
+  {
+    revalidate: 120,
+    tags: ["user-memberships"],
+  },
+);
 
 export type AccessScope = {
   userId: string;
@@ -68,25 +101,7 @@ export async function getAuthenticatedAccessScope(): Promise<AccessScope | null>
     return null;
   }
 
-  const adminClient = createSupabaseAdminClient();
-  const { data, error } = await adminClient
-    .from("user_tribe_membership")
-    .select("tribe, role")
-    .eq("user_id", user.id)
-    .eq("is_active", true);
-
-  if (error) {
-    const details = error.message.toLowerCase();
-    const isMissingMembershipTable =
-      details.includes("user_tribe_membership") &&
-      (details.includes("does not exist") || details.includes("not found"));
-
-    if (!isMissingMembershipTable) {
-      throw new Error(`Failed to load user tribe memberships: ${error.message}`);
-    }
-  }
-
-  const memberships = (data ?? []) as MembershipRow[];
+  const memberships = await getCachedMembershipRows(user.id);
   const roles = Array.from(new Set(memberships.map((row) => normalizeRole(row.role))));
   const tribes = Array.from(
     new Set(

@@ -81,9 +81,24 @@ export async function evaluateAlertRules(tribe?: string): Promise<TriggeredAlert
   if (!rules || rules.length === 0) return [];
 
   const triggered: TriggeredAlert[] = [];
+  const metricsCache = new Map<string, Promise<TribeMetrics[]>>();
+
+  const getCachedMetrics = (ruleTribe: string | null, windowMinutes: number) => {
+    const cacheKey = `${ruleTribe ?? "*"}:${windowMinutes}`;
+
+    const existing = metricsCache.get(cacheKey);
+
+    if (existing) {
+      return existing;
+    }
+
+    const next = getTribeMetrics(ruleTribe, windowMinutes);
+    metricsCache.set(cacheKey, next);
+    return next;
+  };
 
   for (const rule of rules as AlertRule[]) {
-    const metrics = await getTribeMetrics(rule.tribe, rule.window_minutes);
+    const metrics = await getCachedMetrics(rule.tribe, rule.window_minutes);
 
     for (const m of metrics) {
       let fires = false;
@@ -110,7 +125,6 @@ export async function evaluateAlertRules(tribe?: string): Promise<TriggeredAlert
           fires = true;
           title = `Slow runs: ${m.tribe}`;
           body = `Average run duration is ${Math.round(m.avgDurationSeconds)}s (threshold: ${rule.threshold}s) over the last ${rule.window_minutes}min.`;
-          severity = "warning";
         }
       }
 
