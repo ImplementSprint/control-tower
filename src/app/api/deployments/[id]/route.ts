@@ -3,12 +3,17 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { updateDeploymentSchema } from "@/lib/supabase/types";
-import { getAuthenticatedAccessScope } from "@/lib/auth/access";
 import {
   createAuditEvent,
   evaluateDeploymentMutationPolicies,
   resolveTribeForRepository,
 } from "@/lib/control-tower/governance";
+import { logEvent } from "@/lib/observability";
+import {
+  requireAuthenticatedAccessScope,
+  requirePlatformAdmin,
+} from "@/lib/api/auth";
+import { jsonError } from "@/lib/api/responses";
 
 const requestSchema = updateDeploymentSchema.extend({
   durationSeconds: z.preprocess((value) => {
@@ -51,36 +56,34 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const accessScope = await getAuthenticatedAccessScope();
+    const { accessScope, response } = await requireAuthenticatedAccessScope();
 
     if (!accessScope) {
-      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+      return response;
     }
 
-    if (!accessScope.isPlatformAdmin) {
-      return NextResponse.json(
-        { error: "Only platform admins can update deployment records." },
-        { status: 403 },
-      );
+    const platformAdminError = requirePlatformAdmin(
+      accessScope,
+      "Only platform admins can update deployment records.",
+    );
+
+    if (platformAdminError) {
+      return platformAdminError;
     }
 
     const { id } = await params;
 
     if (!id) {
-      return NextResponse.json({ error: "Deployment id is required." }, { status: 400 });
+      return jsonError("Deployment id is required.", 400);
     }
 
     const payload = await request.json();
     const parsed = requestSchema.safeParse(payload);
 
     if (!parsed.success) {
-      return NextResponse.json(
-        {
-          error: "Invalid request body.",
-          issues: parsed.error.flatten(),
-        },
-        { status: 400 },
-      );
+      return jsonError("Invalid request body.", 400, {
+        issues: parsed.error.flatten(),
+      });
     }
 
     const updates: Record<string, string | number | null> = {};
@@ -93,13 +96,9 @@ export async function PATCH(
       .single();
 
     if (existingError || !existingDeployment) {
-      return NextResponse.json(
-        {
-          error: "Unable to find deployment to update.",
-          details: existingError?.message ?? "Missing deployment",
-        },
-        { status: 404 },
-      );
+      return jsonError("Unable to find deployment to update.", 404, {
+        details: existingError?.message ?? "Missing deployment",
+      });
     }
 
     if (parsed.data.status) {
@@ -130,30 +129,22 @@ export async function PATCH(
     });
 
     if (violations.length > 0) {
-      return NextResponse.json(
-        {
-          error: "Deployment update blocked by policy rules.",
-          violations,
-        },
-        { status: 409 },
-      );
+      return jsonError("Deployment update blocked by policy rules.", 409, {
+        violations,
+      });
     }
 
     const { data, error } = await supabase
       .from("deployments")
       .update(updates)
       .eq("id", id)
-      .select("id, repository, tribe, branch, environment, status, summary, commit_sha, duration_seconds, created_at, updated_at")
+      .select("id, repository, tribe, branch, environment, status, summary, commit_sha, run_id, run_attempt, duration_seconds, created_at, updated_at")
       .single();
 
     if (error) {
-      return NextResponse.json(
-        {
-          error: "Unable to update deployment.",
-          details: error.message,
-        },
-        { status: 500 },
-      );
+      return jsonError("Unable to update deployment.", 500, {
+        details: error.message,
+      });
     }
 
     try {
@@ -174,8 +165,12 @@ export async function PATCH(
           next_summary: data.summary,
         },
       });
-    } catch {
-      // Do not fail successful mutation when audit logging has transient issues.
+    } catch (auditError) {
+      logEvent("warn", "deployment.update.audit_write_failed", {
+        repository: data.repository,
+        deployment_id: data.id,
+        details: auditError instanceof Error ? auditError.message : "Unknown error",
+      });
     }
 
     revalidatePath("/");
@@ -186,6 +181,6 @@ export async function PATCH(
         ? error.message
         : "Unexpected error while updating deployment.";
 
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }

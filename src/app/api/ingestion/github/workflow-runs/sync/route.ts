@@ -9,6 +9,15 @@ import type {
   DeploymentEnvironment,
   DeploymentStatus,
 } from "@/lib/supabase/types";
+import {
+  buildRunIdTag,
+  calculateDurationSeconds,
+  getBranchEnvironment,
+  resolveActionFromStatus,
+  resolveDeploymentStatus,
+} from "@/lib/control-tower/github-run-mapping";
+import { upsertDeploymentFromRunIdentity } from "@/lib/control-tower/deployment-ingestion";
+import { logEvent } from "@/lib/observability";
 
 type GitHubWorkflowRun = {
   id?: number;
@@ -40,80 +49,6 @@ type SyncRequestBody = {
   repos?: string[];
   perRepoLimit?: number;
 };
-
-function getBranchEnvironment(branch: string): DeploymentEnvironment {
-  if (branch === "main") {
-    return "main";
-  }
-
-  if (branch === "uat") {
-    return "uat";
-  }
-
-  return "test";
-}
-
-function resolveDeploymentStatus(
-  status: string,
-  conclusion: string,
-): DeploymentStatus {
-  if (status === "in_progress") {
-    return "running";
-  }
-
-  if (
-    status === "queued" ||
-    status === "requested" ||
-    status === "waiting" ||
-    status === "pending"
-  ) {
-    return "queued";
-  }
-
-  if (status === "completed") {
-    if (conclusion === "success") {
-      return "success";
-    }
-
-    if (conclusion === "cancelled" || conclusion === "skipped") {
-      return "cancelled";
-    }
-
-    return "failed";
-  }
-
-  return "queued";
-}
-
-function calculateDurationSeconds(
-  startedAt: string | null | undefined,
-  updatedAt: string | null | undefined,
-) {
-  if (!startedAt || !updatedAt) {
-    return null;
-  }
-
-  const startTimestamp = Date.parse(startedAt);
-  const endTimestamp = Date.parse(updatedAt);
-
-  if (Number.isNaN(startTimestamp) || Number.isNaN(endTimestamp)) {
-    return null;
-  }
-
-  return Math.max(0, Math.round((endTimestamp - startTimestamp) / 1000));
-}
-
-function resolveAction(status: string) {
-  if (status === "completed") {
-    return "completed";
-  }
-
-  if (status === "in_progress") {
-    return "in_progress";
-  }
-
-  return "requested";
-}
 
 function getRequestToken(request: Request) {
   const ingestionHeader = request.headers.get("x-ingestion-token");
@@ -252,7 +187,10 @@ async function upsertWorkflowJobsFromSync(
 
     const jobStatus = (job.status ?? "").toLowerCase();
     const jobConclusion = (job.conclusion ?? "").toLowerCase();
-    const status = resolveDeploymentStatus(jobStatus, jobConclusion);
+    const status = resolveDeploymentStatus({
+      status: jobStatus,
+      conclusion: jobConclusion,
+    });
     const completedAt = jobStatus === "completed" ? job.completed_at ?? null : null;
     const durationSeconds = calculateDurationSeconds(job.started_at, job.completed_at);
 
@@ -300,11 +238,15 @@ async function upsertWorkflowRunFromSync(
   const environment = getBranchEnvironment(branch);
   const runStatus = (run.status ?? "").toLowerCase();
   const runConclusion = (run.conclusion ?? "").toLowerCase();
-  const action = resolveAction(runStatus);
-  const status = resolveDeploymentStatus(runStatus, runConclusion);
+  const action = resolveActionFromStatus(runStatus);
+  const status = resolveDeploymentStatus({
+    action,
+    status: runStatus,
+    conclusion: runConclusion,
+  });
   const runAttempt =
     typeof run.run_attempt === "number" && run.run_attempt > 0 ? run.run_attempt : 1;
-  const runIdTag = `run_id:${run.id}:attempt:${runAttempt}`;
+  const runIdTag = buildRunIdTag(run.id, runAttempt);
   const runUrl = run.html_url ?? "";
   const workflowName = run.name ?? "Workflow";
   const durationSeconds = calculateDurationSeconds(run.run_started_at, run.updated_at);
@@ -367,53 +309,18 @@ async function upsertWorkflowRunFromSync(
     throw new Error(`Failed to upsert workflow run: ${workflowRunUpsertError.message}`);
   }
 
-  let lookupQuery = supabase
-    .from("deployments")
-    .select("id")
-    .eq("repository", repository)
-    .ilike("summary", `%${runIdTag}%`)
-    .limit(1);
-
-  if (run.head_sha) {
-    lookupQuery = lookupQuery.eq("commit_sha", run.head_sha);
-  }
-
-  const { data: existingRow, error: lookupError } = await lookupQuery.maybeSingle();
-
-  if (lookupError) {
-    throw new Error(`Failed to lookup deployment summary row: ${lookupError.message}`);
-  }
-
-  if (existingRow?.id) {
-    const { error: updateError } = await supabase
-      .from("deployments")
-      .update({
-        tribe,
-        status,
-        summary,
-        duration_seconds: durationSeconds,
-      })
-      .eq("id", existingRow.id);
-
-    if (updateError) {
-      throw new Error(`Failed to update deployment summary row: ${updateError.message}`);
-    }
-  } else {
-    const { error: insertError } = await supabase.from("deployments").insert({
-      repository,
-      tribe,
-      branch,
-      environment,
-      status,
-      summary,
-      commit_sha: run.head_sha ?? null,
-      duration_seconds: durationSeconds,
-    });
-
-    if (insertError) {
-      throw new Error(`Failed to insert deployment summary row: ${insertError.message}`);
-    }
-  }
+  await upsertDeploymentFromRunIdentity(supabase, {
+    repository,
+    tribe,
+    branch,
+    environment,
+    status,
+    summary,
+    commitSha: run.head_sha ?? null,
+    durationSeconds,
+    runId: run.id,
+    runAttempt,
+  });
 
   try {
     await createAuditEvent(supabase, {
@@ -432,8 +339,13 @@ async function upsertWorkflowRunFromSync(
         run_url: runUrl || null,
       },
     });
-  } catch {
-    // Keep backfill resilient if audit write fails.
+  } catch (auditError) {
+    logEvent("warn", "github.sync.run_audit_write_failed", {
+      repository,
+      run_id: run.id,
+      run_attempt: runAttempt,
+      details: auditError instanceof Error ? auditError.message : "Unknown error",
+    });
   }
 
   return {
@@ -507,6 +419,11 @@ export async function POST(request: Request) {
     ? Math.min(Math.max(Math.trunc(perRepoLimitRaw), 1), 100)
     : 20;
 
+  logEvent("info", "github.sync.started", {
+    repo_count: repos.length,
+    per_repo_limit: perRepoLimit,
+  });
+
   const supabase = createSupabaseAdminClient();
   const repoErrors: Array<{ repository: string; error: string }> = [];
   const runErrors: Array<{ repository: string; run_id: number | null; error: string }> = [];
@@ -558,8 +475,13 @@ export async function POST(request: Request) {
                 job_count: jobsIngested,
               },
             });
-          } catch {
-            // Keep backfill resilient if audit write fails.
+          } catch (auditError) {
+            logEvent("warn", "github.sync.jobs_audit_write_failed", {
+              repository,
+              run_id: record.run_id,
+              run_attempt: record.run_attempt,
+              details: auditError instanceof Error ? auditError.message : "Unknown error",
+            });
           }
 
           ingested.push({
@@ -567,6 +489,11 @@ export async function POST(request: Request) {
             jobs_ingested: jobsIngested,
           });
         } catch (error) {
+          logEvent("warn", "github.sync.run_failed", {
+            repository,
+            run_id: run.id ?? null,
+            details: error instanceof Error ? error.message : "Unknown run ingestion error",
+          });
           runErrors.push({
             repository,
             run_id: run.id ?? null,
@@ -575,6 +502,10 @@ export async function POST(request: Request) {
         }
       }
     } catch (error) {
+      logEvent("warn", "github.sync.repository_failed", {
+        repository,
+        details: error instanceof Error ? error.message : "Unknown repository sync error",
+      });
       repoErrors.push({
         repository,
         error: error instanceof Error ? error.message : "Unknown repository sync error",
@@ -587,6 +518,15 @@ export async function POST(request: Request) {
   }
 
   const statusCode = repoErrors.length > 0 || runErrors.length > 0 ? 207 : 200;
+
+  logEvent("info", "github.sync.completed", {
+    repos_requested: repos.length,
+    ingested_count: ingested.length,
+    job_ingested_count: jobIngestedCount,
+    repo_error_count: repoErrors.length,
+    run_error_count: runErrors.length,
+    status_code: statusCode,
+  });
 
   return NextResponse.json(
     {

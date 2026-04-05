@@ -63,7 +63,7 @@ Before first production use, run SQL from supabase/schema.sql in Supabase SQL ed
 
 If your deployment was already initialized earlier, run schema.sql again to apply telemetry tables (`workflow_runs`, `github_webhook_events`, `repo_tribe_map`).
 Latest schema also includes `workflow_jobs`, `policy_rules`, and `audit_events` for governance and gate-level telemetry.
-It now also includes `user_tribe_membership` and tribe-scoped read policies.
+It now also includes `user_tribe_membership`, tribe-scoped read policies, and run-linked deployment identity fields (`run_id`, `run_attempt`).
 
 After running schema, seed user access rows (unless auto-sync maps are configured):
 
@@ -123,3 +123,7 @@ Optional JSON body:
 	"perRepoLimit": 25
 }
 ```
+
+## 8) Operations Runbook
+
+For callback error codes, ingestion replay workflow, and structured log event names, see OPERATIONS_RUNBOOK.md.

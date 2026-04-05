@@ -8,6 +8,8 @@ create table if not exists public.deployments (
   status text not null check (status in ('queued', 'running', 'success', 'failed', 'cancelled')),
   summary text,
   commit_sha text,
+  run_id bigint,
+  run_attempt integer,
   duration_seconds integer,
   created_at timestamptz not null default timezone('utc', now()),
   updated_at timestamptz not null default timezone('utc', now())
@@ -19,10 +21,18 @@ add column if not exists tribe text;
 alter table public.deployments
 add column if not exists created_by uuid references auth.users(id) on delete set null;
 
+alter table public.deployments
+add column if not exists run_id bigint;
+
+alter table public.deployments
+add column if not exists run_attempt integer;
+
 create index if not exists deployments_created_at_idx on public.deployments (created_at desc);
 create index if not exists deployments_repo_idx on public.deployments (repository);
 create index if not exists deployments_status_idx on public.deployments (status);
 create index if not exists deployments_tribe_idx on public.deployments (tribe);
+create unique index if not exists deployments_run_identity_uidx on public.deployments (repository, run_id, run_attempt);
+create index if not exists deployments_run_identity_idx on public.deployments (run_id, run_attempt);
 
 create or replace function public.set_updated_at_timestamp()
 returns trigger

@@ -14,6 +14,8 @@ import {
   getScopedTribes,
   type AccessScope,
 } from "@/lib/auth/access";
+import { formatRelativeTime, formatRuntime } from "@/lib/formatters";
+import { getSingleParam } from "@/lib/query-params";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type { DeploymentStatus, WorkflowRun } from "@/lib/supabase/types";
 
@@ -33,14 +35,6 @@ const statusLabel: Record<StatusFilter, string> = {
   failed: "Failed",
   cancelled: "Cancelled",
 };
-
-function getSingleParam(value: string | string[] | undefined) {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-
-  return value;
-}
 
 function normalizeStatusFilter(value: string | undefined): StatusFilter {
   if (
@@ -62,51 +56,6 @@ function buildRunsHref(status: StatusFilter) {
   }
 
   return `/runs?status=${status}`;
-}
-
-function formatRuntime(seconds: number | null) {
-  if (seconds === null || Number.isNaN(seconds)) {
-    return "-";
-  }
-
-  if (seconds < 60) {
-    return `${seconds}s`;
-  }
-
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return `${minutes}m ${remainder}s`;
-}
-
-function formatRelativeTime(value: string | null) {
-  if (!value) {
-    return "just now";
-  }
-
-  const timestamp = new Date(value).getTime();
-
-  if (Number.isNaN(timestamp)) {
-    return "just now";
-  }
-
-  const diffMs = Date.now() - timestamp;
-  const diffMinutes = Math.floor(diffMs / 60000);
-
-  if (diffMinutes < 1) {
-    return "just now";
-  }
-
-  if (diffMinutes < 60) {
-    return `${diffMinutes} min ago`;
-  }
-
-  const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) {
-    return `${diffHours} hour${diffHours === 1 ? "" : "s"} ago`;
-  }
-
-  const diffDays = Math.floor(diffHours / 24);
-  return `${diffDays} day${diffDays === 1 ? "" : "s"} ago`;
 }
 
 async function getRuns(scope: AccessScope, status: StatusFilter) {

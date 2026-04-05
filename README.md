@@ -18,6 +18,7 @@ Fullstack Next.js application designed for Vercel deployment, using shadcn/ui fo
 - Admin-only deployment create/update overrides
 - Supabase-backed persistence with typed validation
 - Normalized workflow run and job ingestion from GitHub Actions
+- Deterministic deployment correlation by `repository + run_id + run_attempt`
 - Policy rules + immutable audit event APIs
 
 ## Local Setup
@@ -63,6 +64,7 @@ Auth + access notes:
 4. Optional auto-sync can upsert `user_tribe_membership` on login from:
 	- `GITHUB_USER_TRIBE_ROLE_MAP_JSON` (GitHub username/email mapping)
 	- `GITHUB_TEAM_TRIBE_ROLE_MAP_JSON` (GitHub team mapping)
+5. Invalid JSON in membership map env vars fails fast with `membership_map_misconfigured` to avoid silent access drift.
 5. When org gating or team-based auto-sync is enabled, include `read:org` in `NEXT_PUBLIC_GITHUB_OAUTH_SCOPES`.
 6. When org gating and team auto-sync are disabled (default), login uses minimal scopes and no org/team membership checks.
 7. Tribe access is controlled by `user_tribe_membership` rows.
@@ -136,6 +138,7 @@ Open http://localhost:3000.
 Use this endpoint to reconcile missed webhook deliveries.
 
 The sync route now ingests both workflow runs and workflow jobs (gate-level records).
+Deployment records are updated using deterministic run identity (`repository/run_id/run_attempt`) to avoid summary-based matching drift.
 
 Example request:
 
@@ -149,3 +152,7 @@ curl -X POST "https://YOUR-VERCEL-DOMAIN.vercel.app/api/ingestion/github/workflo
 ## Vercel Deployment
 
 See DEPLOY_VERCEL.md for a production deployment checklist.
+
+## Operations Runbook
+
+For login failure triage, ingestion replay, and structured log event taxonomy, see OPERATIONS_RUNBOOK.md.

@@ -1,50 +1,56 @@
 import { NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getScopedTribes } from "@/lib/auth/access";
+import { requireAuthenticatedAccessScope } from "@/lib/api/auth";
+import { jsonError } from "@/lib/api/responses";
 import {
-  getAuthenticatedAccessScope,
-  getScopedTribes,
-} from "@/lib/auth/access";
+  getTrimmedSearchParam,
+  parseBoundedIntegerParam,
+  parseOptionalNumberParam,
+} from "@/lib/api/params";
 
 export async function GET(request: Request) {
   try {
-    const accessScope = await getAuthenticatedAccessScope();
+    const { accessScope, response } = await requireAuthenticatedAccessScope();
 
     if (!accessScope) {
-      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+      return response;
     }
 
     const searchParams = new URL(request.url).searchParams;
-    const limitRaw = Number(searchParams.get("limit") ?? "50");
-    const limit = Number.isFinite(limitRaw)
-      ? Math.min(Math.max(Math.trunc(limitRaw), 1), 300)
-      : 50;
+    const limit = parseBoundedIntegerParam({
+      rawValue: searchParams.get("limit"),
+      defaultValue: 50,
+      min: 1,
+      max: 300,
+    });
 
-    const repository = searchParams.get("repository")?.trim();
-    const tribe = searchParams.get("tribe")?.trim() ?? null;
+    const repository = getTrimmedSearchParam(searchParams, "repository");
+    const tribe = getTrimmedSearchParam(searchParams, "tribe");
     const scopedTribes = getScopedTribes(accessScope, tribe);
 
     if (scopedTribes !== null && scopedTribes.length === 0) {
       return NextResponse.json({ data: [] });
     }
 
-    const branch = searchParams.get("branch")?.trim();
-    const environment = searchParams.get("environment")?.trim();
-    const status = searchParams.get("status")?.trim();
-    const runIdRaw = searchParams.get("runId")?.trim();
-    const runAttemptRaw = searchParams.get("runAttempt")?.trim();
+    const branch = getTrimmedSearchParam(searchParams, "branch");
+    const environment = getTrimmedSearchParam(searchParams, "environment");
+    const status = getTrimmedSearchParam(searchParams, "status");
+    const runIdRaw = getTrimmedSearchParam(searchParams, "runId");
+    const runAttemptRaw = getTrimmedSearchParam(searchParams, "runAttempt");
 
-    const runId = runIdRaw ? Number(runIdRaw) : null;
-    if (runIdRaw && (!Number.isFinite(runId) || runId === null)) {
-      return NextResponse.json({ error: "runId must be a number." }, { status: 400 });
+    const runIdParse = parseOptionalNumberParam(runIdRaw, "runId");
+    if (runIdParse.error) {
+      return jsonError(runIdParse.error, 400);
     }
 
-    const runAttempt = runAttemptRaw ? Number(runAttemptRaw) : null;
-    if (runAttemptRaw && (!Number.isFinite(runAttempt) || runAttempt === null)) {
-      return NextResponse.json(
-        { error: "runAttempt must be a number." },
-        { status: 400 },
-      );
+    const runAttemptParse = parseOptionalNumberParam(runAttemptRaw, "runAttempt");
+    if (runAttemptParse.error) {
+      return jsonError(runAttemptParse.error, 400);
     }
+
+    const runId = runIdParse.value;
+    const runAttempt = runAttemptParse.value;
 
     const supabase = createSupabaseAdminClient();
 
@@ -88,25 +94,18 @@ export async function GET(request: Request) {
     const { data, error } = await query;
 
     if (error) {
-      return NextResponse.json(
-        {
-          error: "Failed to fetch workflow jobs from Supabase.",
-          details: error.message,
-        },
-        { status: 500 },
-      );
+      return jsonError("Failed to fetch workflow jobs from Supabase.", 500, {
+        details: error.message,
+      });
     }
 
     return NextResponse.json({ data });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unexpected error while fetching workflow jobs.",
-      },
-      { status: 500 },
+    return jsonError(
+      error instanceof Error
+        ? error.message
+        : "Unexpected error while fetching workflow jobs.",
+      500,
     );
   }
 }

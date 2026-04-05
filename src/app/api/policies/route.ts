@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { getAuthenticatedAccessScope } from "@/lib/auth/access";
+import {
+  requireAuthenticatedAccessScope,
+  requirePlatformAdmin,
+} from "@/lib/api/auth";
+import { jsonError } from "@/lib/api/responses";
+import {
+  getTrimmedSearchParam,
+  parseBoundedIntegerParam,
+} from "@/lib/api/params";
 
 const policyRuleTypes = [
   "block_environment",
@@ -22,29 +30,33 @@ const createPolicySchema = z.object({
 
 export async function GET(request: Request) {
   try {
-    const accessScope = await getAuthenticatedAccessScope();
+    const { accessScope, response } = await requireAuthenticatedAccessScope();
 
     if (!accessScope) {
-      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+      return response;
     }
 
-    if (!accessScope.isPlatformAdmin) {
-      return NextResponse.json(
-        { error: "Only platform admins can view policy rules." },
-        { status: 403 },
-      );
+    const platformAdminError = requirePlatformAdmin(
+      accessScope,
+      "Only platform admins can view policy rules.",
+    );
+
+    if (platformAdminError) {
+      return platformAdminError;
     }
 
     const searchParams = new URL(request.url).searchParams;
-    const limitRaw = Number(searchParams.get("limit") ?? "100");
-    const limit = Number.isFinite(limitRaw)
-      ? Math.min(Math.max(Math.trunc(limitRaw), 1), 500)
-      : 100;
+    const limit = parseBoundedIntegerParam({
+      rawValue: searchParams.get("limit"),
+      defaultValue: 100,
+      min: 1,
+      max: 500,
+    });
 
-    const repository = searchParams.get("repository")?.trim();
-    const tribe = searchParams.get("tribe")?.trim();
-    const environment = searchParams.get("environment")?.trim();
-    const enabled = searchParams.get("enabled")?.trim();
+    const repository = getTrimmedSearchParam(searchParams, "repository");
+    const tribe = getTrimmedSearchParam(searchParams, "tribe");
+    const environment = getTrimmedSearchParam(searchParams, "environment");
+    const enabled = getTrimmedSearchParam(searchParams, "enabled");
 
     const supabase = createSupabaseAdminClient();
 
@@ -75,55 +87,46 @@ export async function GET(request: Request) {
     const { data, error } = await query;
 
     if (error) {
-      return NextResponse.json(
-        {
-          error: "Failed to fetch policy rules.",
-          details: error.message,
-        },
-        { status: 500 },
-      );
+      return jsonError("Failed to fetch policy rules.", 500, {
+        details: error.message,
+      });
     }
 
     return NextResponse.json({ data });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unexpected error while fetching policy rules.",
-      },
-      { status: 500 },
+    return jsonError(
+      error instanceof Error
+        ? error.message
+        : "Unexpected error while fetching policy rules.",
+      500,
     );
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const accessScope = await getAuthenticatedAccessScope();
+    const { accessScope, response } = await requireAuthenticatedAccessScope();
 
     if (!accessScope) {
-      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+      return response;
     }
 
-    if (!accessScope.isPlatformAdmin) {
-      return NextResponse.json(
-        { error: "Only platform admins can create policy rules." },
-        { status: 403 },
-      );
+    const platformAdminError = requirePlatformAdmin(
+      accessScope,
+      "Only platform admins can create policy rules.",
+    );
+
+    if (platformAdminError) {
+      return platformAdminError;
     }
 
     const payload = await request.json();
     const parsed = createPolicySchema.safeParse(payload);
 
     if (!parsed.success) {
-      return NextResponse.json(
-        {
-          error: "Invalid policy payload.",
-          issues: parsed.error.flatten(),
-        },
-        { status: 400 },
-      );
+      return jsonError("Invalid policy payload.", 400, {
+        issues: parsed.error.flatten(),
+      });
     }
 
     const supabase = createSupabaseAdminClient();
@@ -144,25 +147,18 @@ export async function POST(request: Request) {
       .single();
 
     if (error) {
-      return NextResponse.json(
-        {
-          error: "Failed to create policy rule.",
-          details: error.message,
-        },
-        { status: 500 },
-      );
+      return jsonError("Failed to create policy rule.", 500, {
+        details: error.message,
+      });
     }
 
     return NextResponse.json({ data }, { status: 201 });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unexpected error while creating policy rule.",
-      },
-      { status: 500 },
+    return jsonError(
+      error instanceof Error
+        ? error.message
+        : "Unexpected error while creating policy rule.",
+      500,
     );
   }
 }

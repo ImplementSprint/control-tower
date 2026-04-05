@@ -3,15 +3,22 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createDeploymentSchema } from "@/lib/supabase/types";
-import {
-  getAuthenticatedAccessScope,
-  getScopedTribes,
-} from "@/lib/auth/access";
+import { getScopedTribes } from "@/lib/auth/access";
 import {
   createAuditEvent,
   evaluateDeploymentMutationPolicies,
   resolveTribeForRepository,
 } from "@/lib/control-tower/governance";
+import { logEvent } from "@/lib/observability";
+import {
+  requireAuthenticatedAccessScope,
+  requirePlatformAdmin,
+} from "@/lib/api/auth";
+import { jsonError } from "@/lib/api/responses";
+import {
+  getTrimmedSearchParam,
+  parseBoundedIntegerParam,
+} from "@/lib/api/params";
 
 const requestSchema = createDeploymentSchema.extend({
   durationSeconds: z.preprocess((value) => {
@@ -49,18 +56,20 @@ const requestSchema = createDeploymentSchema.extend({
 
 export async function GET(request: Request) {
   try {
-    const accessScope = await getAuthenticatedAccessScope();
+    const { accessScope, response } = await requireAuthenticatedAccessScope();
 
     if (!accessScope) {
-      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+      return response;
     }
 
     const searchParams = new URL(request.url).searchParams;
-    const limitParam = Number(searchParams.get("limit") ?? "20");
-    const limit = Number.isFinite(limitParam)
-      ? Math.min(Math.max(Math.trunc(limitParam), 1), 100)
-      : 20;
-    const requestedTribe = searchParams.get("tribe")?.trim() ?? null;
+    const limit = parseBoundedIntegerParam({
+      rawValue: searchParams.get("limit"),
+      defaultValue: 20,
+      min: 1,
+      max: 100,
+    });
+    const requestedTribe = getTrimmedSearchParam(searchParams, "tribe");
     const scopedTribes = getScopedTribes(accessScope, requestedTribe);
 
     if (scopedTribes !== null && scopedTribes.length === 0) {
@@ -71,7 +80,7 @@ export async function GET(request: Request) {
 
     let query = supabase
       .from("deployments")
-      .select("id, repository, tribe, branch, environment, status, summary, commit_sha, duration_seconds, created_at, updated_at")
+      .select("id, repository, tribe, branch, environment, status, summary, commit_sha, run_id, run_attempt, duration_seconds, created_at, updated_at")
       .order("created_at", { ascending: false })
       .limit(limit);
 
@@ -82,13 +91,10 @@ export async function GET(request: Request) {
     const { data, error } = await query;
 
     if (error) {
-      return NextResponse.json(
-        {
-          error:
-            "Failed to fetch deployments from Supabase. Ensure the table exists and env vars are configured.",
-          details: error.message,
-        },
-        { status: 500 },
+      return jsonError(
+        "Failed to fetch deployments from Supabase. Ensure the table exists and env vars are configured.",
+        500,
+        { details: error.message },
       );
     }
 
@@ -99,36 +105,34 @@ export async function GET(request: Request) {
         ? error.message
         : "Unexpected error while loading deployments.";
 
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }
 
 export async function POST(request: Request) {
   try {
-    const accessScope = await getAuthenticatedAccessScope();
+    const { accessScope, response } = await requireAuthenticatedAccessScope();
 
     if (!accessScope) {
-      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+      return response;
     }
 
-    if (!accessScope.isPlatformAdmin) {
-      return NextResponse.json(
-        { error: "Only platform admins can create deployment records." },
-        { status: 403 },
-      );
+    const platformAdminError = requirePlatformAdmin(
+      accessScope,
+      "Only platform admins can create deployment records.",
+    );
+
+    if (platformAdminError) {
+      return platformAdminError;
     }
 
     const payload = await request.json();
     const parsed = requestSchema.safeParse(payload);
 
     if (!parsed.success) {
-      return NextResponse.json(
-        {
-          error: "Invalid request body.",
-          issues: parsed.error.flatten(),
-        },
-        { status: 400 },
-      );
+      return jsonError("Invalid request body.", 400, {
+        issues: parsed.error.flatten(),
+      });
     }
 
     const supabase = createSupabaseAdminClient();
@@ -142,13 +146,9 @@ export async function POST(request: Request) {
     });
 
     if (violations.length > 0) {
-      return NextResponse.json(
-        {
-          error: "Deployment blocked by policy rules.",
-          violations,
-        },
-        { status: 409 },
-      );
+      return jsonError("Deployment blocked by policy rules.", 409, {
+        violations,
+      });
     }
 
     const { data, error } = await supabase
@@ -164,17 +164,14 @@ export async function POST(request: Request) {
         duration_seconds: parsed.data.durationSeconds ?? null,
         created_by: accessScope.userId,
       })
-      .select("id, repository, tribe, branch, environment, status, summary, commit_sha, duration_seconds, created_at, updated_at")
+      .select("id, repository, tribe, branch, environment, status, summary, commit_sha, run_id, run_attempt, duration_seconds, created_at, updated_at")
       .single();
 
     if (error) {
-      return NextResponse.json(
-        {
-          error:
-            "Unable to create deployment. Verify Supabase schema and service role key.",
-          details: error.message,
-        },
-        { status: 500 },
+      return jsonError(
+        "Unable to create deployment. Verify Supabase schema and service role key.",
+        500,
+        { details: error.message },
       );
     }
 
@@ -193,8 +190,12 @@ export async function POST(request: Request) {
           status: data.status,
         },
       });
-    } catch {
-      // Do not fail successful mutation when audit logging has transient issues.
+    } catch (auditError) {
+      logEvent("warn", "deployment.create.audit_write_failed", {
+        repository: data.repository,
+        deployment_id: data.id,
+        details: auditError instanceof Error ? auditError.message : "Unknown error",
+      });
     }
 
     revalidatePath("/");
@@ -205,6 +206,6 @@ export async function POST(request: Request) {
         ? error.message
         : "Unexpected error while creating deployment.";
 
-    return NextResponse.json({ error: message }, { status: 500 });
+    return jsonError(message, 500);
   }
 }

@@ -1,34 +1,39 @@
 import { NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getScopedTribes } from "@/lib/auth/access";
+import { requireAuthenticatedAccessScope } from "@/lib/api/auth";
+import { jsonError } from "@/lib/api/responses";
 import {
-  getAuthenticatedAccessScope,
-  getScopedTribes,
-} from "@/lib/auth/access";
+  getTrimmedSearchParam,
+  parseBoundedIntegerParam,
+} from "@/lib/api/params";
 
 export async function GET(request: Request) {
   try {
-    const accessScope = await getAuthenticatedAccessScope();
+    const { accessScope, response } = await requireAuthenticatedAccessScope();
 
     if (!accessScope) {
-      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+      return response;
     }
 
     const searchParams = new URL(request.url).searchParams;
-    const limitRaw = Number(searchParams.get("limit") ?? "100");
-    const limit = Number.isFinite(limitRaw)
-      ? Math.min(Math.max(Math.trunc(limitRaw), 1), 500)
-      : 100;
+    const limit = parseBoundedIntegerParam({
+      rawValue: searchParams.get("limit"),
+      defaultValue: 100,
+      min: 1,
+      max: 500,
+    });
 
-    const repository = searchParams.get("repository")?.trim();
-    const tribe = searchParams.get("tribe")?.trim() ?? null;
+    const repository = getTrimmedSearchParam(searchParams, "repository");
+    const tribe = getTrimmedSearchParam(searchParams, "tribe");
     const scopedTribes = getScopedTribes(accessScope, tribe);
 
     if (scopedTribes !== null && scopedTribes.length === 0) {
       return NextResponse.json({ data: [] });
     }
 
-    const eventType = searchParams.get("eventType")?.trim();
-    const source = searchParams.get("source")?.trim();
+    const eventType = getTrimmedSearchParam(searchParams, "eventType");
+    const source = getTrimmedSearchParam(searchParams, "source");
 
     const supabase = createSupabaseAdminClient();
 
@@ -57,25 +62,18 @@ export async function GET(request: Request) {
     const { data, error } = await query;
 
     if (error) {
-      return NextResponse.json(
-        {
-          error: "Failed to fetch audit events.",
-          details: error.message,
-        },
-        { status: 500 },
-      );
+      return jsonError("Failed to fetch audit events.", 500, {
+        details: error.message,
+      });
     }
 
     return NextResponse.json({ data });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unexpected error while fetching audit events.",
-      },
-      { status: 500 },
+    return jsonError(
+      error instanceof Error
+        ? error.message
+        : "Unexpected error while fetching audit events.",
+      500,
     );
   }
 }

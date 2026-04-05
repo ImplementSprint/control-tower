@@ -6,10 +6,14 @@ import {
 	createAuditEvent,
 	resolveTribeForRepository,
 } from "@/lib/control-tower/governance";
-import type {
-	DeploymentEnvironment,
-	DeploymentStatus,
-} from "@/lib/supabase/types";
+import {
+	buildRunIdTag,
+	calculateDurationSeconds,
+	getBranchEnvironment,
+	resolveDeploymentStatus,
+} from "@/lib/control-tower/github-run-mapping";
+import { upsertDeploymentFromRunIdentity } from "@/lib/control-tower/deployment-ingestion";
+import { logEvent } from "@/lib/observability";
 
 type GitHubWorkflowRunPayload = {
 	action?: string;
@@ -34,64 +38,6 @@ type GitHubWorkflowRunPayload = {
 		updated_at?: string | null;
 	};
 };
-
-function getBranchEnvironment(branch: string): DeploymentEnvironment {
-	if (branch === "main") {
-		return "main";
-	}
-
-	if (branch === "uat") {
-		return "uat";
-	}
-
-	return "test";
-}
-
-function resolveDeploymentStatus(
-	action: string,
-	status: string,
-	conclusion: string,
-): DeploymentStatus {
-	if (action === "in_progress" || status === "in_progress") {
-		return "running";
-	}
-
-	if (action === "requested" || status === "queued") {
-		return "queued";
-	}
-
-	if (action === "completed" || status === "completed") {
-		if (conclusion === "success") {
-			return "success";
-		}
-
-		if (conclusion === "cancelled" || conclusion === "skipped") {
-			return "cancelled";
-		}
-
-		return "failed";
-	}
-
-	return "queued";
-}
-
-function calculateDurationSeconds(
-	startedAt: string | null | undefined,
-	updatedAt: string | null | undefined,
-) {
-	if (!startedAt || !updatedAt) {
-		return null;
-	}
-
-	const startTimestamp = Date.parse(startedAt);
-	const endTimestamp = Date.parse(updatedAt);
-
-	if (Number.isNaN(startTimestamp) || Number.isNaN(endTimestamp)) {
-		return null;
-	}
-
-	return Math.max(0, Math.round((endTimestamp - startTimestamp) / 1000));
-}
 
 function isValidSignature(
 	body: string,
@@ -154,6 +100,7 @@ export async function POST(request: Request) {
 	const signatureHeader = request.headers.get("x-hub-signature-256");
 
 	if (!isValidSignature(rawBody, signatureHeader, secret)) {
+		logEvent("warn", "github.webhook.signature_invalid", { event_name: eventName });
 		return NextResponse.json({ error: "Invalid webhook signature." }, { status: 401 });
 	}
 
@@ -187,13 +134,17 @@ export async function POST(request: Request) {
 	const action = (payload.action ?? "").toLowerCase();
 	const runStatus = (workflowRun.status ?? "").toLowerCase();
 	const runConclusion = (workflowRun.conclusion ?? "").toLowerCase();
-	const status = resolveDeploymentStatus(action, runStatus, runConclusion);
+	const status = resolveDeploymentStatus({
+		action,
+		status: runStatus,
+		conclusion: runConclusion,
+	});
 	const environment = getBranchEnvironment(branch);
 	const runAttempt =
 		typeof workflowRun.run_attempt === "number" && workflowRun.run_attempt > 0
 			? workflowRun.run_attempt
 			: 1;
-	const runIdTag = `run_id:${workflowRun.id}:attempt:${runAttempt}`;
+	const runIdTag = buildRunIdTag(workflowRun.id, runAttempt);
 	const runUrl = workflowRun.html_url ?? "";
 	const workflowName =
 		workflowRun.name ?? payload.workflow?.name ?? "Workflow";
@@ -201,6 +152,15 @@ export async function POST(request: Request) {
 		workflowRun.run_started_at,
 		workflowRun.updated_at,
 	);
+
+	logEvent("info", "github.webhook.workflow_run.received", {
+		repository: repositoryName,
+		run_id: workflowRun.id,
+		run_attempt: runAttempt,
+		action,
+		status,
+		environment,
+	});
 
 
 	try {
@@ -275,71 +235,18 @@ export async function POST(request: Request) {
 			);
 		}
 
-		let lookupQuery = supabase
-			.from("deployments")
-			.select("id")
-			.eq("repository", repositoryName)
-			.ilike("summary", `%${runIdTag}%`)
-			.limit(1);
-
-		if (workflowRun.head_sha) {
-			lookupQuery = lookupQuery.eq("commit_sha", workflowRun.head_sha);
-		}
-
-		const { data: existingRow, error: lookupError } = await lookupQuery.maybeSingle();
-
-		if (lookupError) {
-			return NextResponse.json(
-				{
-					error: "Failed to lookup existing deployment row.",
-					details: lookupError.message,
-				},
-				{ status: 500 },
-			);
-		}
-
-		if (existingRow?.id) {
-			const { error: updateError } = await supabase
-				.from("deployments")
-				.update({
-					tribe,
-					status,
-					summary,
-					duration_seconds: durationSeconds,
-				})
-				.eq("id", existingRow.id);
-
-			if (updateError) {
-				return NextResponse.json(
-					{
-						error: "Failed to update deployment row from webhook payload.",
-						details: updateError.message,
-					},
-					{ status: 500 },
-				);
-			}
-		} else {
-			const { error: insertError } = await supabase.from("deployments").insert({
-				repository: repositoryName,
-				tribe,
-				branch,
-				environment,
-				status,
-				summary,
-				commit_sha: workflowRun.head_sha ?? null,
-				duration_seconds: durationSeconds,
-			});
-
-			if (insertError) {
-				return NextResponse.json(
-					{
-						error: "Failed to insert deployment row from webhook payload.",
-						details: insertError.message,
-					},
-					{ status: 500 },
-				);
-			}
-		}
+		await upsertDeploymentFromRunIdentity(supabase, {
+			repository: repositoryName,
+			tribe,
+			branch,
+			environment,
+			status,
+			summary,
+			commitSha: workflowRun.head_sha ?? null,
+			durationSeconds,
+			runId: workflowRun.id,
+			runAttempt,
+		});
 
 		revalidatePath("/");
 
@@ -361,9 +268,24 @@ export async function POST(request: Request) {
 					run_url: runUrl || null,
 				},
 			});
-		} catch {
-			// Keep ingestion path resilient if audit write fails.
+		} catch (auditError) {
+			logEvent("warn", "github.webhook.audit_write_failed", {
+				repository: repositoryName,
+				run_id: workflowRun.id,
+				run_attempt: runAttempt,
+				details: auditError instanceof Error ? auditError.message : "Unknown error",
+			});
 		}
+
+		logEvent("info", "github.webhook.workflow_run.ingested", {
+			delivery_id: deliveryId,
+			repository: repositoryName,
+			run_id: workflowRun.id,
+			run_attempt: runAttempt,
+			status,
+			action,
+			environment,
+		});
 
 		return NextResponse.json({
 			ok: true,
@@ -378,6 +300,9 @@ export async function POST(request: Request) {
 			action,
 		});
 	} catch (error) {
+		logEvent("error", "github.webhook.workflow_run.failed", {
+			details: error instanceof Error ? error.message : "Unknown error",
+		});
 		return NextResponse.json(
 			{
 				error: "Unexpected webhook processing failure.",

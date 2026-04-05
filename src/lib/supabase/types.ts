@@ -22,6 +22,8 @@ export interface Deployment {
   status: DeploymentStatus;
   summary: string | null;
   commit_sha: string | null;
+  run_id: number | null;
+  run_attempt: number | null;
   duration_seconds: number | null;
   created_at: string;
   updated_at: string;

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { getSingleParam } from "@/lib/query-params";
 
 type DeniedPageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -36,14 +37,6 @@ const reasonMessages: Record<DeniedReason, { title: string; description: string 
       "Your request could not be authorized for this Control Tower deployment.",
   },
 };
-
-function getSingleParam(value: string | string[] | undefined) {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-
-  return value;
-}
 
 function normalizeReason(value: string | undefined): DeniedReason {
   if (

@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
 import { getAuthenticatedAccessScope, type AccessScope } from "@/lib/auth/access";
+import { formatDateTime, formatRuntime } from "@/lib/formatters";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type { AuditEvent, WorkflowJob, WorkflowRun } from "@/lib/supabase/types";
 
@@ -37,33 +38,6 @@ function canAccessTribe(scope: AccessScope, tribe: string | null) {
   }
 
   return scope.tribes.includes(tribe.toLowerCase());
-}
-
-function formatRuntime(seconds: number | null) {
-  if (seconds === null || Number.isNaN(seconds)) {
-    return "-";
-  }
-
-  if (seconds < 60) {
-    return `${seconds}s`;
-  }
-
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return `${minutes}m ${remainder}s`;
-}
-
-function formatDateTime(value: string | null) {
-  if (!value) {
-    return "-";
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "-";
-  }
-
-  return date.toLocaleString();
 }
 
 function getRunActionHint(run: WorkflowRun) {

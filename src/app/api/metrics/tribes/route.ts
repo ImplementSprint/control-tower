@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getScopedTribes } from "@/lib/auth/access";
+import { requireAuthenticatedAccessScope } from "@/lib/api/auth";
+import { jsonError } from "@/lib/api/responses";
 import {
-  getAuthenticatedAccessScope,
-  getScopedTribes,
-} from "@/lib/auth/access";
+  getTrimmedSearchParam,
+  parseBoundedIntegerParam,
+} from "@/lib/api/params";
 
 type TribeMetricRow = {
   tribe: string;
@@ -19,18 +22,20 @@ type TribeMetricRow = {
 
 export async function GET(request: Request) {
   try {
-    const accessScope = await getAuthenticatedAccessScope();
+    const { accessScope, response } = await requireAuthenticatedAccessScope();
 
     if (!accessScope) {
-      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+      return response;
     }
 
     const searchParams = new URL(request.url).searchParams;
-    const windowDaysRaw = Number(searchParams.get("windowDays") ?? "14");
-    const windowDays = Number.isFinite(windowDaysRaw)
-      ? Math.min(Math.max(Math.trunc(windowDaysRaw), 1), 90)
-      : 14;
-    const requestedTribe = searchParams.get("tribe")?.trim() ?? null;
+    const windowDays = parseBoundedIntegerParam({
+      rawValue: searchParams.get("windowDays"),
+      defaultValue: 14,
+      min: 1,
+      max: 90,
+    });
+    const requestedTribe = getTrimmedSearchParam(searchParams, "tribe");
     const scopedTribes = getScopedTribes(accessScope, requestedTribe);
 
     if (scopedTribes !== null && scopedTribes.length === 0) {
@@ -53,13 +58,9 @@ export async function GET(request: Request) {
     const { data, error } = await query;
 
     if (error) {
-      return NextResponse.json(
-        {
-          error: "Failed to fetch workflow runs for tribe metrics.",
-          details: error.message,
-        },
-        { status: 500 },
-      );
+      return jsonError("Failed to fetch workflow runs for tribe metrics.", 500, {
+        details: error.message,
+      });
     }
 
     const rows = data ?? [];
@@ -155,14 +156,11 @@ export async function GET(request: Request) {
       data: metrics,
     });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unexpected error while computing tribe metrics.",
-      },
-      { status: 500 },
+    return jsonError(
+      error instanceof Error
+        ? error.message
+        : "Unexpected error while computing tribe metrics.",
+      500,
     );
   }
 }

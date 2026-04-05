@@ -1,34 +1,39 @@
 import { NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getScopedTribes } from "@/lib/auth/access";
+import { requireAuthenticatedAccessScope } from "@/lib/api/auth";
+import { jsonError } from "@/lib/api/responses";
 import {
-  getAuthenticatedAccessScope,
-  getScopedTribes,
-} from "@/lib/auth/access";
+  getTrimmedSearchParam,
+  parseBoundedIntegerParam,
+} from "@/lib/api/params";
 
 export async function GET(request: Request) {
   try {
-    const accessScope = await getAuthenticatedAccessScope();
+    const { accessScope, response } = await requireAuthenticatedAccessScope();
 
     if (!accessScope) {
-      return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+      return response;
     }
 
     const searchParams = new URL(request.url).searchParams;
-    const limitParam = Number(searchParams.get("limit") ?? "30");
-    const limit = Number.isFinite(limitParam)
-      ? Math.min(Math.max(Math.trunc(limitParam), 1), 200)
-      : 30;
+    const limit = parseBoundedIntegerParam({
+      rawValue: searchParams.get("limit"),
+      defaultValue: 30,
+      min: 1,
+      max: 200,
+    });
 
-    const tribe = searchParams.get("tribe")?.trim() ?? null;
+    const tribe = getTrimmedSearchParam(searchParams, "tribe");
     const scopedTribes = getScopedTribes(accessScope, tribe);
 
     if (scopedTribes !== null && scopedTribes.length === 0) {
       return NextResponse.json({ data: [] });
     }
 
-    const branch = searchParams.get("branch")?.trim();
-    const repository = searchParams.get("repository")?.trim();
-    const status = searchParams.get("status")?.trim();
+    const branch = getTrimmedSearchParam(searchParams, "branch");
+    const repository = getTrimmedSearchParam(searchParams, "repository");
+    const status = getTrimmedSearchParam(searchParams, "status");
 
     const supabase = createSupabaseAdminClient();
 
@@ -60,25 +65,18 @@ export async function GET(request: Request) {
     const { data, error } = await query;
 
     if (error) {
-      return NextResponse.json(
-        {
-          error: "Failed to fetch workflow runs from Supabase.",
-          details: error.message,
-        },
-        { status: 500 },
-      );
+      return jsonError("Failed to fetch workflow runs from Supabase.", 500, {
+        details: error.message,
+      });
     }
 
     return NextResponse.json({ data });
   } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unexpected error while fetching workflow runs.",
-      },
-      { status: 500 },
+    return jsonError(
+      error instanceof Error
+        ? error.message
+        : "Unexpected error while fetching workflow runs.",
+      500,
     );
   }
 }
