@@ -105,7 +105,13 @@ function redirectWithSessionCookies(sessionResponse: NextResponse, redirectUrl: 
 
   for (const cookie of sessionResponse.cookies.getAll()) {
     const { name, value, ...options } = cookie;
-    redirectResponse.cookies.set(name, value, options);
+    redirectResponse.cookies.set(name, value, {
+      ...options,
+      path: options.path ?? "/",
+      sameSite: options.sameSite ?? "lax",
+      httpOnly: options.httpOnly ?? true,
+      secure: options.secure ?? process.env.NODE_ENV === "production",
+    });
   }
 
   return redirectResponse;
@@ -115,14 +121,14 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const nextPath = resolveSafeNextPath(url.searchParams.get("next"));
+  const { supabase, sessionResponse } = await createSupabaseRouteContext();
 
   if (!code) {
     const redirectUrl = new URL("/auth/login", url.origin);
     redirectUrl.searchParams.set("error", "missing_oauth_code");
-    return NextResponse.redirect(redirectUrl);
+    return redirectWithSessionCookies(sessionResponse, redirectUrl);
   }
 
-  const { supabase, sessionResponse } = await createSupabaseRouteContext();
   const { data, error } = await supabase.auth.exchangeCodeForSession(code);
 
   if (error || !data.session) {
