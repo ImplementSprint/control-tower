@@ -51,6 +51,10 @@ function normalizeTribe(value: unknown) {
   return normalized;
 }
 
+function slugToSnakeCase(value: string): string {
+  return value.replaceAll(/[\s-]+/g, "_");
+}
+
 function addAssignment(
   assignments: Map<string, MembershipAssignment>,
   next: MembershipAssignment,
@@ -201,8 +205,12 @@ export async function resolveAutomaticMembershipAssignments({
   );
 
   const hasTeamMapping = Object.keys(teamMap).length > 0;
+  const autoAssign =
+    (process.env.AUTO_ASSIGN_TRIBE_FROM_GITHUB_TEAM ?? "false")
+      .trim()
+      .toLowerCase() === "true";
 
-  if (!hasTeamMapping) {
+  if (!hasTeamMapping && !autoAssign) {
     return {
       assignments: Array.from(assignments.values()),
       scopeMissing: false,
@@ -233,11 +241,14 @@ export async function resolveAutomaticMembershipAssignments({
     const mapped =
       (fullKey ? teamMap[fullKey] : undefined) || (slug ? teamMap[slug] : undefined);
 
-    if (!mapped) {
-      continue;
+    if (mapped) {
+      addAssignment(assignments, mapped);
+    } else if (autoAssign && slug) {
+      const tribe = slugToSnakeCase(slug);
+      if (tribe) {
+        addAssignment(assignments, { tribe, role: "viewer" });
+      }
     }
-
-    addAssignment(assignments, mapped);
   }
 
   return {
