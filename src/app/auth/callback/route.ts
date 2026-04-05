@@ -52,7 +52,10 @@ export async function GET(request: Request) {
   const nextPath = resolveSafeNextPath(url.searchParams.get("next"));
   const { supabase, sessionResponse } = await createSupabaseRouteContext();
 
+  console.log("[auth/callback] started", { hasCode: !!code, nextPath });
+
   if (!code) {
+    console.log("[auth/callback] FAIL: missing_oauth_code");
     const redirectUrl = new URL("/auth/login", url.origin);
     redirectUrl.searchParams.set("error", "missing_oauth_code");
     return redirectWithSessionCookies(sessionResponse, redirectUrl);
@@ -61,14 +64,24 @@ export async function GET(request: Request) {
   const { data, error } = await supabase.auth.exchangeCodeForSession(code);
 
   if (error || !data.session) {
+    console.log("[auth/callback] FAIL: oauth_exchange_failed", error?.message);
     const redirectUrl = new URL("/auth/login", url.origin);
     redirectUrl.searchParams.set("error", "oauth_exchange_failed");
     return redirectWithSessionCookies(sessionResponse, redirectUrl);
   }
 
+  console.log("[auth/callback] session exchanged", {
+    userId: data.user?.id,
+    hasProviderToken: !!data.session.provider_token,
+    email: data.session.user?.email,
+  });
+
   const { requiredOrgs, enforceOrgPolicy } = resolveGitHubOrgPolicyConfig();
 
+  console.log("[auth/callback] org policy", { enforceOrgPolicy, requiredOrgs });
+
   if (enforceOrgPolicy && requiredOrgs.length === 0) {
+    console.log("[auth/callback] FAIL: org_policy_misconfigured");
     await supabase.auth.signOut();
     const redirectUrl = new URL("/auth/login", url.origin);
     redirectUrl.searchParams.set("error", "org_policy_misconfigured");
@@ -79,6 +92,7 @@ export async function GET(request: Request) {
     const providerToken = data.session.provider_token;
 
     if (!providerToken) {
+      console.log("[auth/callback] FAIL: github_scope_missing (no provider token)");
       await supabase.auth.signOut();
       const redirectUrl = new URL("/auth/login", url.origin);
       redirectUrl.searchParams.set("error", "github_scope_missing");
@@ -91,6 +105,7 @@ export async function GET(request: Request) {
 
       for (const org of requiredOrgs) {
         const result = await isAllowedGithubOrgMember(providerToken, org);
+        console.log("[auth/callback] org check", { org, allowed: result.allowed, scopeMissing: result.scopeMissing });
 
         if (result.scopeMissing) {
           scopeMissing = true;
@@ -104,21 +119,23 @@ export async function GET(request: Request) {
       }
 
       if (!isAllowed) {
+        const errorType = scopeMissing ? "github_scope_missing" : "org_membership_required";
+        console.log("[auth/callback] FAIL:", errorType);
         await supabase.auth.signOut();
         const redirectUrl = new URL("/auth/login", url.origin);
-        redirectUrl.searchParams.set(
-          "error",
-          scopeMissing ? "github_scope_missing" : "org_membership_required",
-        );
+        redirectUrl.searchParams.set("error", errorType);
         return redirectWithSessionCookies(sessionResponse, redirectUrl);
       }
-    } catch {
+    } catch (orgError) {
+      console.log("[auth/callback] FAIL: org_check_failed", orgError instanceof Error ? orgError.message : orgError);
       await supabase.auth.signOut();
       const redirectUrl = new URL("/auth/login", url.origin);
       redirectUrl.searchParams.set("error", "org_check_failed");
       return redirectWithSessionCookies(sessionResponse, redirectUrl);
     }
   }
+
+  console.log("[auth/callback] org policy passed");
 
   const authenticatedUserId = data.user?.id ?? data.session.user?.id ?? null;
 
@@ -130,11 +147,17 @@ export async function GET(request: Request) {
       >;
 
       try {
+        console.log("[auth/callback] resolving auto membership assignments...");
         autoAssignmentsResult = await resolveAutomaticMembershipAssignments({
           user: (data.user ?? {
             email: data.session.user?.email ?? null,
           }) as AuthenticatedUserLike,
           providerToken: data.session.provider_token ?? null,
+        });
+        console.log("[auth/callback] auto assignments result", {
+          count: autoAssignmentsResult.assignments.length,
+          scopeMissing: autoAssignmentsResult.scopeMissing,
+          tribes: autoAssignmentsResult.assignments.map((a) => a.tribe),
         });
       } catch (error) {
         const details = error instanceof Error ? error.message : "Unknown error";
@@ -199,6 +222,11 @@ export async function GET(request: Request) {
         return redirectWithSessionCookies(sessionResponse, deniedUrl);
       }
 
+      console.log("[auth/callback] tribe memberships query", {
+        count: memberships?.length ?? 0,
+        error: membershipError?.message,
+      });
+
       if (!memberships || memberships.length === 0) {
         const metadataRole =
           typeof data.user?.app_metadata?.role === "string"
@@ -230,6 +258,7 @@ export async function GET(request: Request) {
     }
   }
 
+  console.log("[auth/callback] SUCCESS: redirecting to", nextPath);
   const redirectUrl = new URL(nextPath, url.origin);
   return redirectWithSessionCookies(sessionResponse, redirectUrl);
 }
