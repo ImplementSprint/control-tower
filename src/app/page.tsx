@@ -25,6 +25,7 @@ import {
   getScopedDeployments,
   getScopedWorkflowRuns,
 } from "@/lib/dashboard/query-cache";
+import { TribeSelector } from "@/components/dashboard/tribe-selector";
 import {
   filterDeployments,
   filterWorkflowRuns,
@@ -38,9 +39,9 @@ import {
 import { MetricsSection } from "@/components/dashboard/metrics-section";
 import { NotificationBell } from "@/components/notifications/notification-bell";
 
-type HomePageProps = {
+type HomePageProps = Readonly<{
   searchParams: Promise<Record<string, string | string[] | undefined>>;
-};
+}>;
 
 type DashboardTab = "summary" | "runs" | "metrics";
 
@@ -81,7 +82,40 @@ function normalizeFocusFilter(value: string | undefined): FocusFilter {
   return "all";
 }
 
-function buildDashboardHref(tab: DashboardTab, focus: FocusFilter) {
+function getSelectedTribes(
+  params: Record<string, string | string[] | undefined>,
+  scope: AccessScope,
+): string[] {
+  const tribesParam = params.tribes;
+
+  if (!tribesParam) {
+    return scope.tribes;
+  }
+
+  const selected = Array.isArray(tribesParam) ? tribesParam : [tribesParam];
+  const normalized = selected
+    .map((t) => t.trim().toLowerCase())
+    .filter((t) => t.length > 0);
+
+  if (scope.isPlatformAdmin) {
+    return normalized;
+  }
+
+  // Only allow selection of tribes user has access to
+  return normalized.filter((tribe) =>
+    scope.tribes.some((t) => t.toLowerCase() === tribe),
+  );
+}
+
+function hasTribeFilterParam(params: Record<string, string | string[] | undefined>) {
+  return params.tribes !== undefined;
+}
+
+function buildDashboardHref(
+  tab: DashboardTab,
+  focus: FocusFilter,
+  selectedTribes?: string[],
+) {
   const query = new URLSearchParams();
 
   if (tab !== "summary") {
@@ -90,6 +124,12 @@ function buildDashboardHref(tab: DashboardTab, focus: FocusFilter) {
 
   if (focus !== "all") {
     query.set("focus", focus);
+  }
+
+  if (selectedTribes && selectedTribes.length > 0) {
+    selectedTribes.forEach((tribe) => {
+      query.append("tribes", tribe);
+    });
   }
 
   const encoded = query.toString();
@@ -160,15 +200,27 @@ export default async function Home({ searchParams }: HomePageProps) {
   const resolvedParams = await searchParams;
   const currentTab = normalizeTab(getSingleParam(resolvedParams.tab));
   const focusFilter = normalizeFocusFilter(getSingleParam(resolvedParams.focus));
+  const hasExplicitTribeFilter = hasTribeFilterParam(resolvedParams);
+
+  // Get selected tribes from query params
+  const selectedTribes = getSelectedTribes(resolvedParams, accessScope);
+
+  // Create a filtered scope for data fetching
+  const filteredScope: AccessScope = {
+    ...accessScope,
+    isPlatformAdmin: hasExplicitTribeFilter ? false : accessScope.isPlatformAdmin,
+    tribes: hasExplicitTribeFilter ? selectedTribes : accessScope.tribes,
+  };
+  const persistedTribeFilters = hasExplicitTribeFilter ? selectedTribes : undefined;
 
   const [
     { deployments, error },
     { runs: workflowRuns, error: workflowRunsError },
     { rows: tribeHealth, error: tribeHealthError },
   ] = await Promise.all([
-    getDeployments(accessScope),
-    getWorkflowRuns(accessScope),
-    getTribeHealth(accessScope, 14),
+    getDeployments(filteredScope),
+    getWorkflowRuns(filteredScope),
+    getTribeHealth(filteredScope, 14),
   ]);
 
   const filteredDeployments = filterDeployments(deployments, focusFilter);
@@ -186,11 +238,16 @@ export default async function Home({ searchParams }: HomePageProps) {
     ? `@${accessScope.githubUsername}`
     : accessScope.email;
 
-  const visibleTribeLabel = accessScope.isPlatformAdmin
-    ? "All tribes"
-    : accessScope.tribes.length > 0
-      ? accessScope.tribes.join(", ")
-      : "No tribe assignment";
+  let visibleTribeLabel: string;
+  if (!hasExplicitTribeFilter && accessScope.isPlatformAdmin) {
+    visibleTribeLabel = "All tribes";
+  } else if (selectedTribes.length === 0) {
+    visibleTribeLabel = "No tribes selected";
+  } else if (selectedTribes.length === accessScope.tribes.length) {
+    visibleTribeLabel = "All accessible tribes";
+  } else {
+    visibleTribeLabel = selectedTribes.join(", ");
+  }
 
   const deploymentFocusItems =
     filteredDeployments.filter((item) => item.status === "failed" || item.status === "running")
@@ -268,7 +325,7 @@ export default async function Home({ searchParams }: HomePageProps) {
             {(Object.keys(tabLabels) as DashboardTab[]).map((tab) => (
               <a
                 key={tab}
-                href={buildDashboardHref(tab, focusFilter)}
+                href={buildDashboardHref(tab, focusFilter, persistedTribeFilters)}
                 className={`rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${
                   tab === currentTab
                     ? "bg-foreground text-background"
@@ -282,6 +339,17 @@ export default async function Home({ searchParams }: HomePageProps) {
           <p className="text-sm text-muted-foreground">
             Tribe scope: <span className="font-medium text-foreground">{visibleTribeLabel}</span>
           </p>
+          {accessScope.tribes.length > 1 ? (
+            <TribeSelector
+              tribes={accessScope.tribes}
+              selectedTribes={
+                hasExplicitTribeFilter ? selectedTribes : accessScope.tribes
+              }
+              tab={currentTab}
+              focus={focusFilter}
+              clearHref={buildDashboardHref(currentTab, focusFilter)}
+            />
+          ) : null}
         </section>
 
         {!hasTribeAccess ? (
@@ -408,7 +476,7 @@ export default async function Home({ searchParams }: HomePageProps) {
             {(Object.keys(focusLabels) as FocusFilter[]).map((focus) => (
               <a
                 key={focus}
-                href={buildDashboardHref(currentTab, focus)}
+                href={buildDashboardHref(currentTab, focus, persistedTribeFilters)}
                 className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                   focusFilter === focus
                     ? "bg-foreground text-background"
