@@ -47,6 +47,8 @@ cp .env.example .env.local
 - GITHUB_ALLOWED_ORG (optional, comma-separated; required only when org gate is enabled)
 - GITHUB_USER_TRIBE_ROLE_MAP_JSON (optional username/email -> tribe/role auto-sync)
 - GITHUB_TEAM_TRIBE_ROLE_MAP_JSON (optional team -> tribe/role auto-sync)
+- AUTH_BOOTSTRAP_FIRST_USER_PLATFORM_ADMIN (optional, default `false`; auto-grants first active user as platform admin when no active memberships exist)
+- AUTH_BOOTSTRAP_DEFAULT_TRIBE (optional, default `platform`; bootstrap assignment tribe)
 - GITHUB_WEBHOOK_SECRET (for GitHub webhook signature verification)
 - TRIBE_REPO_MAP_JSON (optional explicit repo-to-tribe mapping)
 - INGESTION_TOKEN (required to protect sync endpoint)
@@ -69,6 +71,7 @@ Auth + access notes:
 6. When org gating and team auto-sync are disabled (default), login uses minimal scopes and no org/team membership checks.
 7. Tribe access is controlled by `user_tribe_membership` rows.
 8. Deployment create/update APIs are reserved for `platform_admin` users.
+9. Optional first-user bootstrap can auto-create one `platform_admin` membership when the table has zero active rows.
 
 Recommended hardening path:
 1. Keep OAuth scopes minimal for identity (`user:email`) unless org policy requires `read:org`.

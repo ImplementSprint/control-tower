@@ -10,6 +10,7 @@ import {
   resolveAutomaticMembershipAssignments,
   type AuthenticatedUserLike,
 } from "@/lib/auth/membership-sync";
+import { resolveMembershipBootstrapConfig } from "@/lib/auth/membership-bootstrap";
 import { isAllowedGithubOrgMember } from "@/lib/auth/github-membership";
 import {
   redirectWithSessionCookies,
@@ -231,6 +232,61 @@ export async function GET(request: Request) {
       }
 
       if (!memberships || memberships.length === 0) {
+        const { isFirstUserBootstrapEnabled, bootstrapTribe } =
+          resolveMembershipBootstrapConfig();
+
+        if (isFirstUserBootstrapEnabled) {
+          const {
+            count: activeMembershipCount,
+            error: activeMembershipCountError,
+          } = await adminClient
+            .from("user_tribe_membership")
+            .select("id", { count: "exact", head: true })
+            .eq("is_active", true);
+
+          if (activeMembershipCountError) {
+            logEvent("error", "auth.callback.membership_count_failed", {
+              error: activeMembershipCountError.message,
+            });
+            const deniedUrl = new URL("/auth/denied", url.origin);
+            deniedUrl.searchParams.set("reason", "membership_table_unavailable");
+            deniedUrl.searchParams.set("next", nextPath);
+            return redirectWithSessionCookies(sessionResponse, deniedUrl);
+          }
+
+          if ((activeMembershipCount ?? 0) === 0) {
+            const { error: bootstrapUpsertError } = await adminClient
+              .from("user_tribe_membership")
+              .upsert(
+                [
+                  {
+                    user_id: authenticatedUserId,
+                    tribe: bootstrapTribe,
+                    role: "platform_admin",
+                    is_active: true,
+                  },
+                ],
+                { onConflict: "user_id,tribe" },
+              );
+
+            if (bootstrapUpsertError) {
+              logEvent("error", "auth.callback.bootstrap_membership_failed", {
+                error: bootstrapUpsertError.message,
+              });
+              const deniedUrl = new URL("/auth/denied", url.origin);
+              deniedUrl.searchParams.set("reason", "membership_check_failed");
+              deniedUrl.searchParams.set("next", nextPath);
+              return redirectWithSessionCookies(sessionResponse, deniedUrl);
+            }
+
+            logEvent("info", "auth.callback.bootstrap_membership_created", {
+              tribe: bootstrapTribe,
+            });
+            const redirectUrl = new URL(nextPath, url.origin);
+            return redirectWithSessionCookies(sessionResponse, redirectUrl);
+          }
+        }
+
         const metadataRole =
           typeof data.user?.app_metadata?.role === "string"
             ? data.user.app_metadata.role.trim().toLowerCase()

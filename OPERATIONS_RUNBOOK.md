@@ -31,6 +31,7 @@ Use the code to triage quickly.
 2. Confirm `NEXT_PUBLIC_GITHUB_OAUTH_SCOPES` contains `read:org` when org/team checks are enabled.
 3. Validate membership mapping JSON with a parser before deployment.
 4. Verify `public.user_tribe_membership` exists and has active rows for target users.
+5. For first-time deployments, optionally set `AUTH_BOOTSTRAP_FIRST_USER_PLATFORM_ADMIN=true` to auto-provision the first authenticated user when no active memberships exist.
 
 ## Ingestion Replay and Verification
 
