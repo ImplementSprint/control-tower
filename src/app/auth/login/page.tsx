@@ -152,7 +152,7 @@ function LoginContent() {
           : buildRequestedScopes();
 
       const supabase = getSupabaseBrowserClient();
-      const { error: signInError } = await supabase.auth.signInWithOAuth({
+      const { data, error: signInError } = await supabase.auth.signInWithOAuth({
         provider: "github",
         options: {
           redirectTo: redirectTo.toString(),
@@ -165,6 +165,15 @@ function LoginContent() {
         setIsLoading(false);
         return;
       }
+
+      // Some runtimes return the OAuth URL without performing navigation.
+      if (data?.url) {
+        globalThis.location.assign(data.url);
+        return;
+      }
+
+      setError("Could not start GitHub sign-in. Please try again.");
+      setIsLoading(false);
     } catch (requestError) {
       setError(
         requestError instanceof Error

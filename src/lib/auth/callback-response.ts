@@ -24,13 +24,7 @@ export function redirectWithSessionCookies(
 
   for (const cookie of sessionResponse.cookies.getAll()) {
     const { name, value, ...options } = cookie;
-    redirectResponse.cookies.set(name, value, {
-      ...options,
-      path: options.path ?? "/",
-      sameSite: options.sameSite ?? "lax",
-      httpOnly: options.httpOnly ?? true,
-      secure: options.secure ?? process.env.NODE_ENV === "production",
-    });
+    redirectResponse.cookies.set(name, value, options);
   }
 
   return redirectResponse;
