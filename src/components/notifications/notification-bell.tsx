@@ -50,9 +50,16 @@ export function NotificationBell() {
 
   // Poll unread count every 60s
   useEffect(() => {
-    void fetchCount();
-    const interval = setInterval(() => { void fetchCount(); }, 60_000);
-    return () => clearInterval(interval);
+    const run = window.setTimeout(() => {
+      void fetchCount();
+    }, 0);
+    const interval = setInterval(() => {
+      void fetchCount();
+    }, 60_000);
+    return () => {
+      window.clearTimeout(run);
+      clearInterval(interval);
+    };
   }, [fetchCount]);
 
   // Open panel

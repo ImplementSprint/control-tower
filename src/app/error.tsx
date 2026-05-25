@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import Link from "next/link";
 import { AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -47,12 +48,12 @@ export default function ErrorPage({ error, reset }: ErrorPageProps) {
               >
                 Try again
               </button>
-              <a
+              <Link
                 href="/"
                 className="inline-flex items-center rounded-full border border-border/70 bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
               >
                 Back to Dashboard
-              </a>
+              </Link>
             </div>
           </CardContent>
         </Card>
