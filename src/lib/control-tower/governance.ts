@@ -110,6 +110,26 @@ export async function resolveTribeForRepository(
   supabase: ReturnType<typeof createSupabaseAdminClient>,
   repository: string,
 ) {
+  const mappedTribe = await resolveMappedTribeForRepository(supabase, repository);
+  if (mappedTribe) {
+    return mappedTribe;
+  }
+
+  const fallbackTribe = deriveTribeFromHeuristics(repository);
+
+  try {
+    await persistDerivedTribeMapping(supabase, repository, fallbackTribe);
+  } catch {
+    // Keep request path resilient if mapping persistence fails.
+  }
+
+  return fallbackTribe;
+}
+
+export async function resolveMappedTribeForRepository(
+  supabase: ReturnType<typeof createSupabaseAdminClient>,
+  repository: string,
+) {
   const mappingSource = process.env.TRIBE_REPO_MAP_JSON;
   const repoName = repository.split("/").at(-1) ?? repository;
 
@@ -140,15 +160,7 @@ export async function resolveTribeForRepository(
     return data.tribe;
   }
 
-  const fallbackTribe = deriveTribeFromHeuristics(repository);
-
-  try {
-    await persistDerivedTribeMapping(supabase, repository, fallbackTribe);
-  } catch {
-    // Keep request path resilient if mapping persistence fails.
-  }
-
-  return fallbackTribe;
+  return null;
 }
 
 function isRuleInScope(rule: PolicyRule, context: DeploymentPolicyContext) {

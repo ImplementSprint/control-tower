@@ -1,52 +1,17 @@
-import { NextResponse } from "next/server";
-import { createServerClient } from "@supabase/ssr";
-import { cookies } from "next/headers";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import {
-  resolveGitHubOrgPolicyConfig,
-  resolveSupabasePublicConfig,
-} from "@/lib/config";
+import { resolveGitHubOrgPolicyConfig } from "@/lib/config";
 import {
   resolveAutomaticMembershipAssignments,
   type AuthenticatedUserLike,
 } from "@/lib/auth/membership-sync";
 import { resolveMembershipBootstrapConfig } from "@/lib/auth/membership-bootstrap";
-import { isAllowedGithubOrgMember } from "@/lib/auth/github-membership";
+import { evaluateGitHubOrgPolicy } from "@/lib/auth/callback-policy";
 import {
   redirectWithSessionCookies,
   resolveSafeNextPath,
 } from "@/lib/auth/callback-response";
+import { createSupabaseRouteContext } from "@/lib/auth/supabase-route-context";
 import { logEvent } from "@/lib/observability";
-
-type SupabaseRouteContext = {
-  supabase: ReturnType<typeof createServerClient>;
-  sessionResponse: NextResponse;
-};
-
-async function createSupabaseRouteContext(): Promise<SupabaseRouteContext> {
-  const cookieStore = await cookies();
-  const { url, publishableKey } = resolveSupabasePublicConfig();
-
-  const sessionResponse = NextResponse.next();
-  const supabase = createServerClient(url, publishableKey, {
-    cookies: {
-      getAll() {
-        return cookieStore.getAll();
-      },
-      setAll(cookiesToSet) {
-        cookiesToSet.forEach(({ name, value, options }) => {
-          cookieStore.set(name, value, options);
-          sessionResponse.cookies.set(name, value, options);
-        });
-      },
-    },
-  });
-
-  return {
-    supabase,
-    sessionResponse,
-  };
-}
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -81,59 +46,30 @@ export async function GET(request: Request) {
 
   logEvent("info", "auth.callback.org_policy", { enforceOrgPolicy, orgCount: requiredOrgs.length });
 
-  if (enforceOrgPolicy && requiredOrgs.length === 0) {
-    logEvent("warn", "auth.callback.failed", { reason: "org_policy_misconfigured" });
+  try {
+    const orgPolicyResult = await evaluateGitHubOrgPolicy({
+      enforceOrgPolicy,
+      requiredOrgs,
+      providerToken: data.session.provider_token,
+    });
+
+    if (!orgPolicyResult.allowed) {
+      const reason =
+        orgPolicyResult.error === "github_org_not_allowed"
+          ? "org_membership_required"
+          : orgPolicyResult.error;
+      logEvent("warn", "auth.callback.failed", { reason });
+      await supabase.auth.signOut();
+      const redirectUrl = new URL("/auth/login", url.origin);
+      redirectUrl.searchParams.set("error", reason);
+      return redirectWithSessionCookies(sessionResponse, redirectUrl);
+    }
+  } catch (orgError) {
+    logEvent("error", "auth.callback.failed", { reason: "org_check_failed", error: orgError instanceof Error ? orgError.message : "unknown" });
     await supabase.auth.signOut();
     const redirectUrl = new URL("/auth/login", url.origin);
-    redirectUrl.searchParams.set("error", "org_policy_misconfigured");
+    redirectUrl.searchParams.set("error", "org_check_failed");
     return redirectWithSessionCookies(sessionResponse, redirectUrl);
-  }
-
-  if (enforceOrgPolicy && requiredOrgs.length > 0) {
-    const providerToken = data.session.provider_token;
-
-    if (!providerToken) {
-      logEvent("warn", "auth.callback.failed", { reason: "github_scope_missing", detail: "no_provider_token" });
-      await supabase.auth.signOut();
-      const redirectUrl = new URL("/auth/login", url.origin);
-      redirectUrl.searchParams.set("error", "github_scope_missing");
-      return redirectWithSessionCookies(sessionResponse, redirectUrl);
-    }
-
-    try {
-      let isAllowed = false;
-      let scopeMissing = false;
-
-      for (const org of requiredOrgs) {
-        const result = await isAllowedGithubOrgMember(providerToken, org);
-        logEvent("info", "auth.callback.org_check", { allowed: result.allowed, scopeMissing: result.scopeMissing });
-
-        if (result.scopeMissing) {
-          scopeMissing = true;
-          continue;
-        }
-
-        if (result.allowed) {
-          isAllowed = true;
-          break;
-        }
-      }
-
-      if (!isAllowed) {
-        const reason = scopeMissing ? "github_scope_missing" : "org_membership_required";
-        logEvent("warn", "auth.callback.failed", { reason });
-        await supabase.auth.signOut();
-        const redirectUrl = new URL("/auth/login", url.origin);
-        redirectUrl.searchParams.set("error", reason);
-        return redirectWithSessionCookies(sessionResponse, redirectUrl);
-      }
-    } catch (orgError) {
-      logEvent("error", "auth.callback.failed", { reason: "org_check_failed", error: orgError instanceof Error ? orgError.message : "unknown" });
-      await supabase.auth.signOut();
-      const redirectUrl = new URL("/auth/login", url.origin);
-      redirectUrl.searchParams.set("error", "org_check_failed");
-      return redirectWithSessionCookies(sessionResponse, redirectUrl);
-    }
   }
 
   logEvent("info", "auth.callback.org_policy_passed");

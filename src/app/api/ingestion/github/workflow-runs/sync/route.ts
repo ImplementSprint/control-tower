@@ -1,49 +1,31 @@
 import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
-  createAuditEvent,
-  resolveTribeForRepository,
-} from "@/lib/control-tower/governance";
+  upsertDeploymentForWorkflowRun,
+  writeWorkflowAuditEvent,
+} from "@/lib/control-tower/deployment-policy-service";
+import { resolveTribeForRepository } from "@/lib/control-tower/governance";
+import {
+  fetchWorkflowJobs,
+  fetchWorkflowRuns,
+  mapWithConcurrency,
+} from "@/lib/github/github-client";
+import {
+  buildSyncWorkflowRunPayload,
+  normalizeSyncWorkflowRun,
+  normalizeWorkflowJob,
+} from "@/lib/github/workflow-normalizer";
+import {
+  upsertRawWorkflowEvent,
+  upsertWorkflowJobs,
+  upsertWorkflowRunRecord,
+} from "@/lib/github/workflow-run-store";
+import { logEvent } from "@/lib/observability";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import type {
   DeploymentEnvironment,
   DeploymentStatus,
 } from "@/lib/supabase/types";
-import {
-  buildRunIdTag,
-  calculateDurationSeconds,
-  getBranchEnvironment,
-  resolveActionFromStatus,
-  resolveDeploymentStatus,
-} from "@/lib/control-tower/github-run-mapping";
-import { upsertDeploymentFromRunIdentity } from "@/lib/control-tower/deployment-ingestion";
-import { logEvent } from "@/lib/observability";
-
-type GitHubWorkflowRun = {
-  id?: number;
-  run_attempt?: number;
-  name?: string | null;
-  status?: string | null;
-  conclusion?: string | null;
-  html_url?: string | null;
-  head_branch?: string | null;
-  head_sha?: string | null;
-  run_started_at?: string | null;
-  updated_at?: string | null;
-  event?: string | null;
-};
-
-type GitHubWorkflowJob = {
-  id?: number;
-  run_id?: number;
-  run_attempt?: number;
-  name?: string | null;
-  status?: string | null;
-  conclusion?: string | null;
-  html_url?: string | null;
-  started_at?: string | null;
-  completed_at?: string | null;
-};
 
 type SyncRequestBody = {
   repos?: string[];
@@ -96,267 +78,11 @@ function resolveRepoList(bodyRepos: string[] | undefined) {
     .filter((repo) => repo.length > 0);
 }
 
-async function fetchWorkflowRuns(
-  repository: string,
-  token: string,
-  perRepoLimit: number,
-) {
-  const url = new URL(`https://api.github.com/repos/${repository}/actions/runs`);
-  url.searchParams.set("per_page", String(perRepoLimit));
-
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${token}`,
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-    cache: "no-store",
-  });
-
-  if (!response.ok) {
-    const responseText = await response.text();
-    throw new Error(
-      `GitHub API request failed for ${repository} (${response.status}): ${responseText.slice(0, 240)}`,
-    );
-  }
-
-  const payload = (await response.json()) as { workflow_runs?: GitHubWorkflowRun[] };
-  return payload.workflow_runs ?? [];
-}
-
-async function fetchWorkflowJobs(
-  repository: string,
-  runId: number,
-  token: string,
-) {
-  const jobs: GitHubWorkflowJob[] = [];
-
-  for (let page = 1; page <= 10; page += 1) {
-    const url = new URL(
-      `https://api.github.com/repos/${repository}/actions/runs/${runId}/jobs`,
-    );
-    url.searchParams.set("per_page", "100");
-    url.searchParams.set("page", String(page));
-
-    const response = await fetch(url, {
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${token}`,
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      const responseText = await response.text();
-      throw new Error(
-        `GitHub jobs API request failed for ${repository} run ${runId} (${response.status}): ${responseText.slice(0, 240)}`,
-      );
-    }
-
-    const payload = (await response.json()) as { jobs?: GitHubWorkflowJob[] };
-    const pageJobs = payload.jobs ?? [];
-    jobs.push(...pageJobs);
-
-    if (pageJobs.length < 100) {
-      break;
-    }
-  }
-
-  return jobs;
-}
-
-async function upsertWorkflowJobsFromSync(
-  supabase: ReturnType<typeof createSupabaseAdminClient>,
-  input: {
-    repository: string;
-    runId: number;
-    runAttempt: number;
-    tribe: string;
-    branch: string;
-    environment: DeploymentEnvironment;
-    jobs: GitHubWorkflowJob[];
-  },
-) {
-  let upsertedCount = 0;
-
-  for (const job of input.jobs) {
-    if (!job.id) {
-      continue;
-    }
-
-    const jobStatus = (job.status ?? "").toLowerCase();
-    const jobConclusion = (job.conclusion ?? "").toLowerCase();
-    const status = resolveDeploymentStatus({
-      status: jobStatus,
-      conclusion: jobConclusion,
-    });
-    const completedAt = jobStatus === "completed" ? job.completed_at ?? null : null;
-    const durationSeconds = calculateDurationSeconds(job.started_at, job.completed_at);
-
-    const { error } = await supabase.from("workflow_jobs").upsert(
-      {
-        repository: input.repository,
-        run_id: input.runId,
-        run_attempt: input.runAttempt,
-        job_id: job.id,
-        name: job.name ?? `Job ${job.id}`,
-        tribe: input.tribe,
-        branch: input.branch,
-        environment: input.environment,
-        status,
-        github_status: jobStatus || null,
-        github_conclusion: jobConclusion || null,
-        run_url: job.html_url ?? null,
-        started_at: job.started_at ?? null,
-        completed_at: completedAt,
-        duration_seconds: durationSeconds,
-      },
-      { onConflict: "repository,job_id" },
-    );
-
-    if (error) {
-      throw new Error(`Failed to upsert workflow job ${job.id}: ${error.message}`);
-    }
-
-    upsertedCount += 1;
-  }
-
-  return upsertedCount;
-}
-
-async function upsertWorkflowRunFromSync(
-  supabase: ReturnType<typeof createSupabaseAdminClient>,
-  repository: string,
-  run: GitHubWorkflowRun,
-) {
-  if (!run.id) {
-    throw new Error("GitHub workflow run is missing id.");
-  }
-
-  const branch = run.head_branch ?? "test";
-  const environment = getBranchEnvironment(branch);
-  const runStatus = (run.status ?? "").toLowerCase();
-  const runConclusion = (run.conclusion ?? "").toLowerCase();
-  const action = resolveActionFromStatus(runStatus);
-  const status = resolveDeploymentStatus({
-    action,
-    status: runStatus,
-    conclusion: runConclusion,
-  });
-  const runAttempt =
-    typeof run.run_attempt === "number" && run.run_attempt > 0 ? run.run_attempt : 1;
-  const runIdTag = buildRunIdTag(run.id, runAttempt);
-  const runUrl = run.html_url ?? "";
-  const workflowName = run.name ?? "Workflow";
-  const durationSeconds = calculateDurationSeconds(run.run_started_at, run.updated_at);
-  const tribe = await resolveTribeForRepository(supabase, repository);
-  const summary = `[tribe:${tribe}] ${workflowName} ${status} (${runIdTag})${runUrl ? ` ${runUrl}` : ""}`.slice(
-    0,
-    500,
-  );
-  const completedAt = runStatus === "completed" ? run.updated_at ?? null : null;
-  const deliveryId = `sync:${repository}:${run.id}:${runAttempt}`;
-
-  const rawPayload = {
-    action,
-    repository: {
-      full_name: repository,
-    },
-    workflow_run: run,
-  };
-
-  const { error: rawEventError } = await supabase.from("github_webhook_events").upsert(
-    {
-      delivery_id: deliveryId,
-      event_name: "workflow_run_sync",
-      action,
-      repository,
-      payload: rawPayload,
-      signature_valid: true,
-    },
-    { onConflict: "delivery_id" },
-  );
-
-  if (rawEventError) {
-    throw new Error(`Failed to store sync raw event: ${rawEventError.message}`);
-  }
-
-  const { error: workflowRunUpsertError } = await supabase.from("workflow_runs").upsert(
-    {
-      repository,
-      run_id: run.id,
-      run_attempt: runAttempt,
-      workflow_name: workflowName,
-      branch,
-      environment,
-      tribe,
-      status,
-      github_status: runStatus || null,
-      github_conclusion: runConclusion || null,
-      event_name: "workflow_run_sync",
-      action,
-      run_url: runUrl || null,
-      commit_sha: run.head_sha ?? null,
-      started_at: run.run_started_at ?? null,
-      completed_at: completedAt,
-      duration_seconds: durationSeconds,
-    },
-    { onConflict: "repository,run_id,run_attempt" },
-  );
-
-  if (workflowRunUpsertError) {
-    throw new Error(`Failed to upsert workflow run: ${workflowRunUpsertError.message}`);
-  }
-
-  await upsertDeploymentFromRunIdentity(supabase, {
-    repository,
-    tribe,
-    branch,
-    environment,
-    status,
-    summary,
-    commitSha: run.head_sha ?? null,
-    durationSeconds,
-    runId: run.id,
-    runAttempt,
-  });
-
-  try {
-    await createAuditEvent(supabase, {
-      eventType: "workflow_run.synced",
-      source: "github-sync",
-      actor: "sync-endpoint",
-      actorType: "sync",
-      repository,
-      tribe,
-      branch,
-      environment,
-      runId: run.id,
-      runAttempt: runAttempt,
-      details: {
-        status,
-        run_url: runUrl || null,
-      },
-    });
-  } catch (auditError) {
-    logEvent("warn", "github.sync.run_audit_write_failed", {
-      repository,
-      run_id: run.id,
-      run_attempt: runAttempt,
-      details: auditError instanceof Error ? auditError.message : "Unknown error",
-    });
-  }
-
-  return {
-    repository,
-    run_id: run.id,
-    run_attempt: runAttempt,
-    environment,
-    status,
-    tribe,
-    branch,
-  };
+function resolvePerRepoLimit(value: number | undefined) {
+  const perRepoLimitRaw = Number(value ?? 20);
+  return Number.isFinite(perRepoLimitRaw)
+    ? Math.min(Math.max(Math.trunc(perRepoLimitRaw), 1), 100)
+    : 20;
 }
 
 export async function POST(request: Request) {
@@ -414,10 +140,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const perRepoLimitRaw = Number(requestBody.perRepoLimit ?? 20);
-  const perRepoLimit = Number.isFinite(perRepoLimitRaw)
-    ? Math.min(Math.max(Math.trunc(perRepoLimitRaw), 1), 100)
-    : 20;
+  const perRepoLimit = resolvePerRepoLimit(requestBody.perRepoLimit);
 
   logEvent("info", "github.sync.started", {
     repo_count: repos.length,
@@ -439,53 +162,92 @@ export async function POST(request: Request) {
   }> = [];
   let jobIngestedCount = 0;
 
-  for (const repository of repos) {
+  await mapWithConcurrency(repos, 3, async (repository) => {
     try {
       const runs = await fetchWorkflowRuns(repository, githubToken, perRepoLimit);
 
-      for (const run of runs) {
+      await mapWithConcurrency(runs, 4, async (run) => {
         try {
-          const record = await upsertWorkflowRunFromSync(supabase, repository, run);
-          const jobs = await fetchWorkflowJobs(repository, record.run_id, githubToken);
-          const jobsIngested = await upsertWorkflowJobsFromSync(supabase, {
+          const tribe = await resolveTribeForRepository(supabase, repository);
+          const record = normalizeSyncWorkflowRun(repository, run, tribe);
+          const deliveryId = `sync:${repository}:${record.runId}:${record.runAttempt}`;
+
+          await upsertRawWorkflowEvent(supabase, {
+            deliveryId,
+            eventName: record.eventName,
+            action: record.action,
             repository,
-            runId: record.run_id,
-            runAttempt: record.run_attempt,
-            tribe: record.tribe,
-            branch: record.branch,
-            environment: record.environment,
-            jobs,
+            payload: buildSyncWorkflowRunPayload(repository, record, run),
+            signatureValid: true,
           });
+          await upsertWorkflowRunRecord(supabase, record);
+          await upsertDeploymentForWorkflowRun(supabase, record);
+
+          await writeWorkflowAuditEvent(supabase, {
+            warnEventName: "github.sync.run_audit_write_failed",
+            event: {
+              eventType: "workflow_run.synced",
+              source: "github-sync",
+              actor: "sync-endpoint",
+              actorType: "sync",
+              repository,
+              tribe,
+              branch: record.branch,
+              environment: record.environment,
+              runId: record.runId,
+              runAttempt: record.runAttempt,
+              details: {
+                status: record.status,
+                run_url: record.runUrl || null,
+              },
+            },
+          });
+
+          const jobs = await fetchWorkflowJobs(repository, record.runId, githubToken);
+          const normalizedJobs = jobs
+            .map((job) =>
+              normalizeWorkflowJob({
+                repository,
+                runId: record.runId,
+                runAttempt: record.runAttempt,
+                tribe,
+                branch: record.branch,
+                environment: record.environment,
+                job,
+              }),
+            )
+            .filter((job) => job !== null);
+          const jobsIngested = await upsertWorkflowJobs(supabase, normalizedJobs);
 
           jobIngestedCount += jobsIngested;
 
-          try {
-            await createAuditEvent(supabase, {
+          await writeWorkflowAuditEvent(supabase, {
+            warnEventName: "github.sync.jobs_audit_write_failed",
+            event: {
               eventType: "workflow_jobs.synced",
               source: "github-sync",
               actor: "sync-endpoint",
               actorType: "sync",
               repository,
-              tribe: record.tribe,
+              tribe,
               branch: record.branch,
               environment: record.environment,
-              runId: record.run_id,
-              runAttempt: record.run_attempt,
+              runId: record.runId,
+              runAttempt: record.runAttempt,
               details: {
                 job_count: jobsIngested,
               },
-            });
-          } catch (auditError) {
-            logEvent("warn", "github.sync.jobs_audit_write_failed", {
-              repository,
-              run_id: record.run_id,
-              run_attempt: record.run_attempt,
-              details: auditError instanceof Error ? auditError.message : "Unknown error",
-            });
-          }
+            },
+          });
 
           ingested.push({
-            ...record,
+            repository,
+            run_id: record.runId,
+            run_attempt: record.runAttempt,
+            environment: record.environment,
+            status: record.status,
+            tribe,
+            branch: record.branch,
             jobs_ingested: jobsIngested,
           });
         } catch (error) {
@@ -500,7 +262,7 @@ export async function POST(request: Request) {
             error: error instanceof Error ? error.message : "Unknown run ingestion error",
           });
         }
-      }
+      });
     } catch (error) {
       logEvent("warn", "github.sync.repository_failed", {
         repository,
@@ -511,7 +273,7 @@ export async function POST(request: Request) {
         error: error instanceof Error ? error.message : "Unknown repository sync error",
       });
     }
-  }
+  });
 
   if (ingested.length > 0) {
     revalidatePath("/");
