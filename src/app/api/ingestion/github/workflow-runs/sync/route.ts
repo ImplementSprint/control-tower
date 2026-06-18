@@ -96,6 +96,28 @@ function resolveRepoList(bodyRepos: string[] | undefined) {
     .filter((repo) => repo.length > 0);
 }
 
+export async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  const workerCount = Math.min(Math.max(Math.trunc(concurrency), 1), items.length);
+  let nextIndex = 0;
+
+  async function runWorker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+
+  return results;
+}
+
 async function fetchWorkflowRuns(
   repository: string,
   token: string,
@@ -439,11 +461,11 @@ export async function POST(request: Request) {
   }> = [];
   let jobIngestedCount = 0;
 
-  for (const repository of repos) {
+  await mapWithConcurrency(repos, 3, async (repository) => {
     try {
       const runs = await fetchWorkflowRuns(repository, githubToken, perRepoLimit);
 
-      for (const run of runs) {
+      await mapWithConcurrency(runs, 4, async (run) => {
         try {
           const record = await upsertWorkflowRunFromSync(supabase, repository, run);
           const jobs = await fetchWorkflowJobs(repository, record.run_id, githubToken);
@@ -500,7 +522,7 @@ export async function POST(request: Request) {
             error: error instanceof Error ? error.message : "Unknown run ingestion error",
           });
         }
-      }
+      });
     } catch (error) {
       logEvent("warn", "github.sync.repository_failed", {
         repository,
@@ -511,7 +533,7 @@ export async function POST(request: Request) {
         error: error instanceof Error ? error.message : "Unknown repository sync error",
       });
     }
-  }
+  });
 
   if (ingested.length > 0) {
     revalidatePath("/");

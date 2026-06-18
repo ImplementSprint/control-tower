@@ -11,10 +11,25 @@ type AlertChannel = {
   is_enabled: boolean;
 };
 
+type SupabaseAdminClient = ReturnType<typeof createSupabaseAdminClient>;
+
 export async function dispatchAlerts(alerts: TriggeredAlert[]): Promise<void> {
   if (alerts.length === 0) return;
 
   const supabase = createSupabaseAdminClient();
+  const recipientsByTribe = new Map<string, Promise<string[]>>();
+  const loadRecipients = (tribe: string | null) => {
+    const key = tribe ?? "__platform_admins__";
+    const existing = recipientsByTribe.get(key);
+
+    if (existing) {
+      return existing;
+    }
+
+    const recipients = loadNotificationRecipients(supabase, tribe);
+    recipientsByTribe.set(key, recipients);
+    return recipients;
+  };
 
   // Fetch enabled channels
   const { data: channels } = await supabase
@@ -51,39 +66,48 @@ export async function dispatchAlerts(alerts: TriggeredAlert[]): Promise<void> {
       }
 
       if (channel.channel_type === "in_app") {
-        await dispatchInAppNotifications(alert);
+        await dispatchInAppNotifications(supabase, alert, await loadRecipients(alert.tribe));
       }
     }
 
     // Always send in-app if the rule channels list includes "in_app"
     const ruleChannels = Array.isArray(alert.rule.channels) ? alert.rule.channels : ["in_app"];
     if (ruleChannels.includes("in_app") && !relevantChannels.some((c) => c.channel_type === "in_app")) {
-      await dispatchInAppNotifications(alert);
+      await dispatchInAppNotifications(supabase, alert, await loadRecipients(alert.tribe));
     }
   }
 }
 
-async function dispatchInAppNotifications(alert: TriggeredAlert) {
-  const supabase = createSupabaseAdminClient();
-
+async function loadNotificationRecipients(
+  supabase: SupabaseAdminClient,
+  tribe: string | null,
+) {
   // Find all users in the affected tribe (or all platform admins)
   let membersQuery = supabase
     .from("user_tribe_membership")
     .select("user_id")
     .eq("is_active", true);
 
-  if (alert.tribe) {
-    membersQuery = membersQuery.or(`tribe.eq.${alert.tribe},role.eq.platform_admin`);
+  if (tribe) {
+    membersQuery = membersQuery.or(`tribe.eq.${tribe},role.eq.platform_admin`);
   } else {
     membersQuery = membersQuery.eq("role", "platform_admin");
   }
 
   const { data: members } = await membersQuery;
-  if (!members || members.length === 0) return;
+  if (!members || members.length === 0) return [];
 
-  const uniqueUserIds = [...new Set(members.map((m) => m.user_id as string))];
+  return [...new Set(members.map((m) => m.user_id as string))];
+}
 
-  const notifications = uniqueUserIds.map((userId) => ({
+async function dispatchInAppNotifications(
+  supabase: SupabaseAdminClient,
+  alert: TriggeredAlert,
+  recipientUserIds: string[],
+) {
+  if (recipientUserIds.length === 0) return;
+
+  const notifications = recipientUserIds.map((userId) => ({
     user_id: userId,
     tribe: alert.tribe,
     title: alert.title,
