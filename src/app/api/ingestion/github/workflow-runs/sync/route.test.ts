@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { mapWithConcurrency } from "./route";
+import { mapWithConcurrency } from "@/lib/github/github-client";
 
 describe("mapWithConcurrency", () => {
   it("limits concurrent workers", async () => {
