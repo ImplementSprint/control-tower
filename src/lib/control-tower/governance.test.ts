@@ -3,6 +3,7 @@ import {
   resolveMappedTribeForRepository,
   resolveTribeForRepository,
 } from "./governance";
+import { createSelectChain } from "@/test/mock-supabase-chain";
 
 const ORIGINAL_MAP = process.env.TRIBE_REPO_MAP_JSON;
 
@@ -12,7 +13,7 @@ afterEach(() => {
 });
 
 function makeSupabase(mappedTribe: string | null) {
-  const maybeSingle = vi.fn().mockResolvedValue({
+  const selectChain = createSelectChain({
     data: mappedTribe ? { tribe: mappedTribe } : null,
     error: null,
   });
@@ -20,13 +21,7 @@ function makeSupabase(mappedTribe: string | null) {
   const from = vi.fn((table: string) => {
     if (table === "repo_tribe_map") {
       return {
-        select: () => ({
-          eq: () => ({
-            in: () => ({
-              limit: () => ({ maybeSingle }),
-            }),
-          }),
-        }),
+        ...selectChain,
         upsert,
       };
     }
