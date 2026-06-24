@@ -51,6 +51,23 @@ describe("resolveAutomaticMembershipAssignments", () => {
     expect(result.assignments).toEqual([{ tribe: "payments", role: "lead" }]);
   });
 
+  it("does not grant membership from user metadata", async () => {
+    process.env.GITHUB_USER_TRIBE_ROLE_MAP_JSON = "";
+    process.env.GITHUB_TEAM_TRIBE_ROLE_MAP_JSON = "";
+
+    const result = await resolveAutomaticMembershipAssignments({
+      user: {
+        email: "alice@example.com",
+        app_metadata: { role: "platform_admin" },
+        user_metadata: { tribe: "platform", role: "platform_admin" },
+      },
+      providerToken: null,
+    });
+
+    expect(result.scopeMissing).toBe(false);
+    expect(result.assignments).toEqual([]);
+  });
+
   it("flags missing scope when team mapping exists but token is absent", async () => {
     process.env.GITHUB_USER_TRIBE_ROLE_MAP_JSON = "";
     process.env.GITHUB_TEAM_TRIBE_ROLE_MAP_JSON = JSON.stringify({

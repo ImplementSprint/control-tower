@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
+import { revalidateTag } from "next/cache";
 import { z } from "zod";
+import { listAllAuthUsers } from "@/lib/auth/admin-users";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { requireAuthenticatedAccessScope, requirePlatformAdmin } from "@/lib/api/auth";
 import { jsonError } from "@/lib/api/responses";
@@ -31,7 +33,7 @@ export async function GET() {
         .from("user_tribe_membership")
         .select("id, user_id, tribe, role, is_active, created_at, updated_at")
         .order("updated_at", { ascending: false }),
-      supabase.auth.admin.listUsers({ perPage: 1000 }),
+      listAllAuthUsers(supabase),
     ]);
 
     if (membershipsResult.error) {
@@ -39,7 +41,7 @@ export async function GET() {
     }
 
     const userMap = new Map(
-      (usersResult.data?.users ?? []).map((u) => [
+      usersResult.map((u) => [
         u.id,
         {
           email: u.email,
@@ -84,6 +86,7 @@ export async function POST(request: Request) {
       .single();
 
     if (error) return jsonError("Failed to save membership.", 500, { details: error.message });
+    revalidateTag("user-memberships", "max");
     return NextResponse.json({ data }, { status: 201 });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Unexpected error.", 500);
@@ -116,6 +119,7 @@ export async function PATCH(request: Request) {
       .single();
 
     if (error) return jsonError("Failed to update membership.", 500, { details: error.message });
+    revalidateTag("user-memberships", "max");
     return NextResponse.json({ data });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Unexpected error.", 500);

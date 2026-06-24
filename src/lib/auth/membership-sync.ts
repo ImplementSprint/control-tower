@@ -161,23 +161,6 @@ export async function resolveAutomaticMembershipAssignments({
 }) {
   const assignments = new Map<string, MembershipAssignment>();
 
-  const metadata =
-    user.user_metadata && typeof user.user_metadata === "object"
-      ? (user.user_metadata as Record<string, unknown>)
-      : undefined;
-  const appMetadata =
-    user.app_metadata && typeof user.app_metadata === "object"
-      ? (user.app_metadata as Record<string, unknown>)
-      : undefined;
-
-  const metadataTribe = normalizeTribe(metadata?.tribe);
-  if (metadataTribe) {
-    addAssignment(assignments, {
-      tribe: metadataTribe,
-      role: normalizeMembershipRole(appMetadata?.role ?? metadata?.role),
-    });
-  }
-
   const userMap = parseMembershipMap(
     process.env.GITHUB_USER_TRIBE_ROLE_MAP_JSON,
     "GITHUB_USER_TRIBE_ROLE_MAP_JSON",

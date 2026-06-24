@@ -70,4 +70,58 @@ describe("dispatchAlerts", () => {
 
     expect(from.mock.calls.filter(([table]) => table === "user_tribe_membership")).toHaveLength(1);
   });
+
+  it("deduplicates in-app notifications across matching channels", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const from = vi.fn((table: string) => {
+      if (table === "alert_channels") {
+        return {
+          select: () => ({
+            eq: async () => ({
+              data: [
+                {
+                  id: "global-in-app",
+                  tribe: null,
+                  channel_type: "in_app",
+                  config: {},
+                  is_enabled: true,
+                },
+                {
+                  id: "tribe-in-app",
+                  tribe: "commerce",
+                  channel_type: "in_app",
+                  config: {},
+                  is_enabled: true,
+                },
+              ],
+            }),
+          }),
+        };
+      }
+
+      if (table === "user_tribe_membership") {
+        return {
+          select: () => ({
+            eq: () => ({
+              or: async () => ({ data: [{ user_id: "user-1" }] }),
+            }),
+          }),
+        };
+      }
+
+      return { insert };
+    });
+
+    vi.mocked(createSupabaseAdminClient).mockReturnValue({ from } as never);
+
+    await dispatchAlerts([makeAlert()]);
+
+    expect(insert).toHaveBeenCalledTimes(1);
+    expect(insert).toHaveBeenCalledWith([
+      expect.objectContaining({
+        user_id: "user-1",
+        source_id: "rule-a",
+      }),
+    ]);
+  });
 });

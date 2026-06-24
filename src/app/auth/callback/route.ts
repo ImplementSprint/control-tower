@@ -223,24 +223,6 @@ export async function GET(request: Request) {
           }
         }
 
-        const metadataRole =
-          typeof data.user?.app_metadata?.role === "string"
-            ? data.user.app_metadata.role.trim().toLowerCase()
-            : "";
-        const metadataTribe =
-          typeof data.user?.user_metadata?.tribe === "string"
-            ? data.user.user_metadata.tribe.trim().toLowerCase()
-            : "";
-
-        const hasMetadataFallbackAccess =
-          metadataRole === "platform_admin" || metadataTribe.length > 0;
-
-        if (hasMetadataFallbackAccess) {
-          logEvent("info", "auth.callback.metadata_fallback_access_granted");
-          const redirectUrl = new URL(nextPath, url.origin);
-          return redirectWithSessionCookies(sessionResponse, redirectUrl);
-        }
-
         logEvent("warn", "auth.callback.access_denied", { reason: "tribe_membership_required" });
         const deniedUrl = new URL("/auth/denied", url.origin);
         deniedUrl.searchParams.set("reason", "tribe_membership_required");
