@@ -111,17 +111,6 @@ export async function getAuthenticatedAccessScope(): Promise<AccessScope | null>
     ),
   );
 
-  const metadataRole = normalizeRole(user.app_metadata?.role);
-  const metadataTribe = normalizeTribe(user.user_metadata?.tribe);
-
-  if (!roles.includes(metadataRole)) {
-    roles.push(metadataRole);
-  }
-
-  if (metadataTribe && !tribes.includes(metadataTribe)) {
-    tribes.push(metadataTribe);
-  }
-
   const githubIdentity = user.identities?.find(
     (identity) => identity.provider === "github",
   );

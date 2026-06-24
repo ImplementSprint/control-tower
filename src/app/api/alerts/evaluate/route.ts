@@ -10,7 +10,12 @@ export async function POST(request: Request) {
     // Simple token auth for cron calls
     const auth = request.headers.get("authorization");
     const token = process.env.INGESTION_TOKEN;
-    if (token && auth !== `Bearer ${token}`) {
+    if (!token) {
+      logEvent("error", "alerts.evaluate_failed", { reason: "missing_ingestion_token" });
+      return jsonError("INGESTION_TOKEN is required.", 500);
+    }
+
+    if (auth !== `Bearer ${token}`) {
       return jsonError("Unauthorized.", 401);
     }
 

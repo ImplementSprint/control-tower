@@ -40,6 +40,7 @@ export async function dispatchAlerts(alerts: TriggeredAlert[]): Promise<void> {
   const allChannels = (channels ?? []) as AlertChannel[];
 
   for (const alert of alerts) {
+    const notifiedInAppUserIds = new Set<string>();
     const relevantChannels = allChannels.filter(
       (ch) => ch.tribe === null || ch.tribe === alert.tribe,
     );
@@ -66,16 +67,44 @@ export async function dispatchAlerts(alerts: TriggeredAlert[]): Promise<void> {
       }
 
       if (channel.channel_type === "in_app") {
-        await dispatchInAppNotifications(supabase, alert, await loadRecipients(alert.tribe));
+        await dispatchInAppNotificationsOnce(
+          supabase,
+          alert,
+          await loadRecipients(alert.tribe),
+          notifiedInAppUserIds,
+        );
       }
     }
 
     // Always send in-app if the rule channels list includes "in_app"
     const ruleChannels = Array.isArray(alert.rule.channels) ? alert.rule.channels : ["in_app"];
     if (ruleChannels.includes("in_app") && !relevantChannels.some((c) => c.channel_type === "in_app")) {
-      await dispatchInAppNotifications(supabase, alert, await loadRecipients(alert.tribe));
+      await dispatchInAppNotificationsOnce(
+        supabase,
+        alert,
+        await loadRecipients(alert.tribe),
+        notifiedInAppUserIds,
+      );
     }
   }
+}
+
+async function dispatchInAppNotificationsOnce(
+  supabase: SupabaseAdminClient,
+  alert: TriggeredAlert,
+  recipientUserIds: string[],
+  notifiedUserIds: Set<string>,
+) {
+  const pendingUserIds = recipientUserIds.filter((userId) => {
+    if (notifiedUserIds.has(userId)) {
+      return false;
+    }
+
+    notifiedUserIds.add(userId);
+    return true;
+  });
+
+  await dispatchInAppNotifications(supabase, alert, pendingUserIds);
 }
 
 async function loadNotificationRecipients(

@@ -1,3 +1,4 @@
+import { listAllAuthUsers } from "@/lib/auth/admin-users";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,11 +26,11 @@ async function getMemberships(): Promise<MembershipWithUser[]> {
       .from("user_tribe_membership")
       .select("id, user_id, tribe, role, is_active, updated_at")
       .order("updated_at", { ascending: false }),
-    supabase.auth.admin.listUsers({ perPage: 1000 }),
+    listAllAuthUsers(supabase),
   ]);
 
   const userMap = new Map(
-    (usersResult.data?.users ?? []).map((u) => [
+    usersResult.map((u) => [
       u.id,
       {
         email: u.email ?? null,
